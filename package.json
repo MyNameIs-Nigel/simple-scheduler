@@ -17,6 +17,7 @@
   "dependencies": {
     "@fontsource-variable/jetbrains-mono": "^5.3.0",
     "@fontsource/inter": "^5.3.0",
+    "@touch4it/ical-timezones": "^1.9.0",
     "better-sqlite3": "^13.0.3",
     "drizzle-orm": "^0.45.2",
     "ical-generator": "^11.1.1",
