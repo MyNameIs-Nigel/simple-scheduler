@@ -20,6 +20,7 @@ import {
   type CalendarView,
 } from "@/lib/events/view";
 import { dayKey } from "@/lib/time";
+import { requestNow } from "@/lib/now";
 import type { Accent } from "@/types";
 
 /**
@@ -33,6 +34,7 @@ export default async function SchedulePage(props: PageProps<"/">) {
   const params = await props.searchParams;
 
   const zone = timezone();
+  const now = await requestNow();
   const view: CalendarView = parseView(first(params.view));
   const anchorIso = first(params.date);
   const anchor = parseAnchor(anchorIso, zone);
@@ -141,7 +143,7 @@ export default async function SchedulePage(props: PageProps<"/">) {
             Upcoming
           </h2>
           <AgendaList
-            occurrences={occurrences.filter((o) => o.end >= Date.now()).slice(0, 12)}
+            occurrences={occurrences.filter((o) => o.end >= now).slice(0, 12)}
             calendars={lookup}
             zone={zone}
             todayKey={today}

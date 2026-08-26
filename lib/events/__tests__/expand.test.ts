@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { DateTime } from "luxon";
 
 import { expandOccurrences } from "../expand";
+import { EMPTY_RECURRENCE, buildRRule, parseRRule } from "../rrule";
 import type { EventOverride, EventRow } from "@/db/schema";
 
 const ZONE = "America/New_York";
@@ -226,5 +227,63 @@ describe("robustness", () => {
 
     const out = expand([a, b], [], "2026-03-01T00:00", "2026-04-01T00:00");
     expect(out.map((o) => o.eventId)).toEqual(["b", "a"]);
+  });
+});
+
+describe("RRULE builder round-trip", () => {
+  it("serialises a weekly rule with weekdays", () => {
+    const rule = buildRRule(
+      { freq: "weekly", interval: 1, byWeekday: [0, 2], endMode: "never" },
+      ZONE,
+    );
+    expect(rule).toContain("FREQ=WEEKLY");
+    expect(rule).toContain("BYDAY=MO,WE");
+  });
+
+  it("emits UNTIL as UTC, inclusive of the chosen day", () => {
+    const rule = buildRRule(
+      { freq: "daily", interval: 1, byWeekday: [], endMode: "until", until: "2026-03-05" },
+      ZONE,
+    );
+    // End of 2026-03-05 in New York is 2026-03-06T04:59:59Z.
+    expect(rule).toMatch(/UNTIL=20260306T04595[0-9]Z/);
+  });
+
+  it("round-trips through parseRRule", () => {
+    const form = {
+      freq: "weekly" as const,
+      interval: 2,
+      byWeekday: [1, 3],
+      endMode: "count" as const,
+      count: 10,
+    };
+    const parsed = parseRRule(buildRRule(form, ZONE), ZONE);
+
+    expect(parsed.freq).toBe("weekly");
+    expect(parsed.interval).toBe(2);
+    expect(parsed.byWeekday).toEqual([1, 3]);
+    expect(parsed.endMode).toBe("count");
+    expect(parsed.count).toBe(10);
+  });
+
+  it("returns null for no recurrence", () => {
+    expect(buildRRule({ ...EMPTY_RECURRENCE }, ZONE)).toBeNull();
+  });
+
+  it("a built rule actually expands to the requested days", () => {
+    const rule = buildRRule(
+      { freq: "weekly", interval: 1, byWeekday: [0], endMode: "count", count: 3 },
+      ZONE,
+    );
+    const out = expand([makeEvent({ rrule: rule })], [], "2026-03-01T00:00", "2026-04-01T00:00");
+    expect(out.map((o) => hhmm(o.start))).toEqual([
+      "2026-03-02 14:00",
+      "2026-03-09 14:00",
+      "2026-03-16 14:00",
+    ]);
+  });
+
+  it("survives an unparseable rule without throwing", () => {
+    expect(parseRRule("nonsense", ZONE).freq).toBe("none");
   });
 });
