@@ -39,3 +39,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# app data (sqlite db + wal)
+/data
+
+# env: keep the example committed
+!.env.example
