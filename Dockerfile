@@ -44,6 +44,9 @@ RUN apk add --no-cache libc6-compat \
 # copied explicitly. better-sqlite3 brings its compiled .node binary with it.
 COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
 COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
+# public/ is tracked via a .gitkeep. Git does not record empty directories, and
+# without that file this COPY fails in CI while succeeding locally, where the
+# directory still exists in the working tree.
 COPY --from=builder --chown=nextjs:nodejs /app/public ./public
 
 # Migrations run before the server starts, so the runner needs the SQL, the
