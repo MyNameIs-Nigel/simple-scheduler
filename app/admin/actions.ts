@@ -2,11 +2,17 @@
 
 import { revalidatePath } from "next/cache";
 import { redirect } from "next/navigation";
-import { and, eq } from "drizzle-orm";
+import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { db } from "@/db";
-import { calendars, eventOverrides, events } from "@/db/schema";
+import {
+  restoreOccurrenceRecord,
+  saveCalendarRecord,
+  saveEventRecord,
+  skipOccurrenceRecord,
+} from "@/db/mutations";
+import { calendars, events } from "@/db/schema";
 import { requireAdmin } from "@/lib/auth/dal";
 import { siteUrl, timezone } from "@/lib/env";
 import { buildRRule } from "@/lib/events/rrule";
@@ -58,47 +64,9 @@ export async function saveCalendar(
   });
 
   if (!parsed.success) return fail("Please fix the highlighted fields.", zodErrors(parsed.error));
-  const input = parsed.data;
 
-  // Slug is in the public feed URL, so a collision would silently reroute a feed.
-  const clash = await db
-    .select({ id: calendars.id })
-    .from(calendars)
-    .where(eq(calendars.slug, input.slug))
-    .limit(1);
-
-  if (clash.length > 0 && clash[0].id !== id) {
-    return fail("That slug is already in use.", { slug: "Already in use" });
-  }
-
-  const now = Date.now();
-
-  if (id) {
-    await db
-      .update(calendars)
-      .set({
-        name: input.name,
-        slug: input.slug,
-        description: input.description || null,
-        accent: input.accent,
-        isPublic: input.isPublic,
-        updatedAt: now,
-      })
-      .where(eq(calendars.id, id));
-  } else {
-    const count = await db.select({ id: calendars.id }).from(calendars);
-    await db.insert(calendars).values({
-      id: `cal_${nanoid(12)}`,
-      name: input.name,
-      slug: input.slug,
-      description: input.description || null,
-      accent: input.accent,
-      isPublic: input.isPublic,
-      sortOrder: count.length,
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
+  const result = saveCalendarRecord(db, { id: id || undefined, ...parsed.data });
+  if (!result.ok) return fail("That slug is already in use.", { slug: "Already in use" });
 
   refresh();
   redirect("/admin/calendars");
@@ -178,62 +146,25 @@ export async function saveEvent(_prev: ActionState, formData: FormData): Promise
     zone,
   );
 
-  const now = Date.now();
-  const host = new URL(siteUrl()).host;
-
-  if (id) {
-    const [existing] = await db.select().from(events).where(eq(events.id, id)).limit(1);
-    if (!existing) return fail("That event no longer exists.");
-
-    // Moving the series start invalidates overrides keyed to the old slots.
-    const startMoved = existing.dtstart !== dtstart;
-    const recurrenceChanged = existing.rrule !== rrule;
-
-    await db
-      .update(events)
-      .set({
-        calendarId: input.calendarId,
-        summary: input.summary,
-        description: input.description || null,
-        location: input.location || null,
-        url: input.url || null,
-        dtstart,
-        dtend,
-        allDay,
-        rrule,
-        status: input.status,
-        // RFC 5545: subscribers ignore an update whose SEQUENCE has not moved.
-        sequence: existing.sequence + 1,
-        updatedAt: now,
-        ...(startMoved || recurrenceChanged ? { exdates: null } : {}),
-      })
-      .where(eq(events.id, id));
-
-    if (startMoved || recurrenceChanged) {
-      await db.delete(eventOverrides).where(eq(eventOverrides.eventId, id));
-    }
-  } else {
-    const newId = `evt_${nanoid(12)}`;
-    await db.insert(events).values({
-      id: newId,
+  const result = saveEventRecord(
+    db,
+    {
+      id: id || undefined,
       calendarId: input.calendarId,
-      // Stable for the life of the event — never regenerated on edit.
-      uid: `${newId}@${host}`,
       summary: input.summary,
-      description: input.description || null,
-      location: input.location || null,
-      url: input.url || null,
+      description: input.description,
+      location: input.location,
+      url: input.url,
+      allDay,
       dtstart,
       dtend,
-      allDay,
       rrule,
-      exdates: null,
       status: input.status,
-      sequence: 0,
-      createdAt: now,
-      updatedAt: now,
-    });
-  }
+    },
+    { host: new URL(siteUrl()).host },
+  );
+
+  if (!result.ok) return fail("That event no longer exists.");
 
   refresh();
   redirect("/admin/events");
@@ -261,27 +192,7 @@ export async function skipOccurrence(formData: FormData): Promise<void> {
   const recurrenceId = Number(formData.get("recurrenceId"));
   if (!eventId || !Number.isFinite(recurrenceId)) return;
 
-  const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
-  if (!event) return;
-
-  const exdates = new Set(event.exdates ?? []);
-  exdates.add(recurrenceId);
-
-  await db
-    .update(events)
-    .set({
-      exdates: [...exdates].sort((a, b) => a - b),
-      sequence: event.sequence + 1,
-      updatedAt: Date.now(),
-    })
-    .where(eq(events.id, eventId));
-
-  // A skipped occurrence and an override for the same slot would contradict.
-  await db
-    .delete(eventOverrides)
-    .where(
-      and(eq(eventOverrides.eventId, eventId), eq(eventOverrides.recurrenceId, recurrenceId)),
-    );
+  skipOccurrenceRecord(db, eventId, recurrenceId);
 
   refresh();
 }
@@ -294,19 +205,7 @@ export async function restoreOccurrence(formData: FormData): Promise<void> {
   const recurrenceId = Number(formData.get("recurrenceId"));
   if (!eventId || !Number.isFinite(recurrenceId)) return;
 
-  const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
-  if (!event) return;
-
-  const exdates = (event.exdates ?? []).filter((d) => d !== recurrenceId);
-
-  await db
-    .update(events)
-    .set({
-      exdates: exdates.length > 0 ? exdates : null,
-      sequence: event.sequence + 1,
-      updatedAt: Date.now(),
-    })
-    .where(eq(events.id, eventId));
+  restoreOccurrenceRecord(db, eventId, recurrenceId);
 
   refresh();
 }
