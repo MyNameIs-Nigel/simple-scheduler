@@ -18,9 +18,14 @@ const globalForDb = globalThis as unknown as {
 
 function createDb() {
   const file = process.env.DATABASE_PATH || "./data/scheduler.db";
-  fs.mkdirSync(path.dirname(path.resolve(file)), { recursive: true });
 
-  const sqlite = new Database(file);
+  // turbopackIgnore keeps the bundler from treating this runtime path as a
+  // module reference. Without it Turbopack traces the entire project into the
+  // standalone output — every source file and the whole public folder.
+  const resolved = path.resolve(/* turbopackIgnore: true */ file);
+  fs.mkdirSync(path.dirname(resolved), { recursive: true });
+
+  const sqlite = new Database(resolved);
   // WAL lets the public read path proceed while an admin write is in flight.
   sqlite.pragma("journal_mode = WAL");
   // Off by default in SQLite; required for our ON DELETE CASCADE to fire.

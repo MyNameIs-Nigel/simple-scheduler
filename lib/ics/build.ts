@@ -6,6 +6,7 @@ import { getVtimezoneComponent } from "@touch4it/ical-timezones";
 import { DateTime } from "luxon";
 
 import { siteUrl, timezone } from "@/lib/env";
+import { normaliseUtcStamps } from "./format";
 import {
   getCalendarBySlug,
   listAllEvents,
@@ -83,9 +84,9 @@ export async function buildFeed(rawSlug: string): Promise<IcsResult | null> {
   });
 
   // Tells subscribing clients how often to poll. Purely advisory.
+  // X-WR-CALNAME and X-WR-TIMEZONE are already emitted from the `name` and
+  // `timezone` options above — setting them again here duplicates the lines.
   cal.x("X-PUBLISHED-TTL", "PT15M");
-  cal.x("X-WR-CALNAME", resolved.name);
-  cal.x("X-WR-TIMEZONE", zone);
 
   for (const event of rows) {
     addSeries(cal, event, zone);
@@ -94,7 +95,7 @@ export async function buildFeed(rawSlug: string): Promise<IcsResult | null> {
     }
   }
 
-  const body = cal.toString();
+  const body = normaliseUtcStamps(cal.toString(), zone);
 
   return {
     body,

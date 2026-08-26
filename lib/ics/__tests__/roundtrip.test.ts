@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import ical, { ICalEventStatus } from "ical-generator";
 import { getVtimezoneComponent } from "@touch4it/ical-timezones";
 import { DateTime } from "luxon";
-import icalParser from "node-ical";
+import icalParser, { type VEvent } from "node-ical";
+
+import { normaliseUtcStamps } from "../format";
 
 const ZONE = "America/New_York";
 
@@ -100,7 +102,7 @@ describe("generated ICS", () => {
 describe("parsed back by node-ical", () => {
   const parsed = icalParser.parseICS(buildSample());
   const entries = Object.values(parsed).filter(
-    (e): e is icalParser.VEvent => (e as icalParser.VEvent).type === "VEVENT",
+    (e): e is VEvent => (e as VEvent).type === "VEVENT",
   );
 
   it("yields the expected events", () => {
@@ -119,5 +121,30 @@ describe("parsed back by node-ical", () => {
     const series = entries.find((e) => e.summary === "Standup");
     const start = DateTime.fromJSDate(series!.start as Date, { zone: ZONE });
     expect(start.toFormat("yyyy-MM-dd HH:mm")).toBe("2026-03-02 14:00");
+  });
+});
+
+describe("UTC stamp normalisation", () => {
+  it("converts a floating DTSTAMP to UTC with a Z suffix", () => {
+    // 2026-03-01 05:00 EST == 10:00 UTC
+    const input = "BEGIN:VEVENT\r\nDTSTAMP:20260301T050000\r\nEND:VEVENT";
+    expect(normaliseUtcStamps(input, ZONE)).toContain("DTSTAMP:20260301T100000Z");
+  });
+
+  it("also normalises CREATED and LAST-MODIFIED", () => {
+    const input = "CREATED:20260301T050000\r\nLAST-MODIFIED:20260301T060000";
+    const out = normaliseUtcStamps(input, ZONE);
+    expect(out).toContain("CREATED:20260301T100000Z");
+    expect(out).toContain("LAST-MODIFIED:20260301T110000Z");
+  });
+
+  it("leaves an already-UTC stamp alone", () => {
+    const input = "DTSTAMP:20260301T100000Z";
+    expect(normaliseUtcStamps(input, ZONE)).toBe(input);
+  });
+
+  it("does not touch DTSTART, which is legitimately zone-qualified", () => {
+    const input = `DTSTART;TZID=${ZONE}:20260302T140000`;
+    expect(normaliseUtcStamps(input, ZONE)).toBe(input);
   });
 });
