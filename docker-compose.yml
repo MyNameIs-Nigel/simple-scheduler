@@ -1,0 +1,41 @@
+# Deployment target: the box behind the cloudflared tunnel.
+#
+# The tunnel itself runs on a separate edge machine, so there is no cloudflared
+# service here — this stack only publishes the app on the LAN for that machine's
+# ingress rule to reach. Point the tunnel's service at http://<this-host>:3000.
+#
+# The image is pulled from GHCR, built and pushed by .github/workflows/publish.yml
+# on every push to main. To deploy:
+#
+#   docker compose pull && docker compose up -d
+#
+# Nothing is baked into the image, so a config change is an env edit plus a
+# restart — no rebuild.
+
+services:
+  scheduler:
+    image: ${SCHEDULER_IMAGE:-ghcr.io/mynameis-nigel/simple-scheduler:latest}
+    container_name: simple-scheduler
+    restart: unless-stopped
+
+    # Bind to a specific interface if this host sits on an untrusted network,
+    # e.g. BIND_ADDRESS=192.168.1.50, or 127.0.0.1 if the tunnel is local.
+    ports:
+      - "${BIND_ADDRESS:-0.0.0.0}:${HOST_PORT:-3000}:3000"
+
+    environment:
+      SITE_URL: ${SITE_URL:?set SITE_URL in .env}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:?set GOOGLE_CLIENT_ID in .env}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:?set GOOGLE_CLIENT_SECRET in .env}
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?set ADMIN_EMAIL in .env}
+      SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
+      SCHEDULER_TIMEZONE: ${SCHEDULER_TIMEZONE:-America/New_York}
+      DATABASE_PATH: /app/data/scheduler.db
+      # Container clock, so log timestamps read sensibly. Stored instants are
+      # UTC regardless of this.
+      TZ: ${SCHEDULER_TIMEZONE:-America/New_York}
+
+    volumes:
+      # The SQLite file plus its WAL and shared-memory index. This directory is
+      # the entire backup surface.
+      - ./data:/app/data
