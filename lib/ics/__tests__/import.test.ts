@@ -143,3 +143,50 @@ describe("all-day anchoring", () => {
     expect(start.toFormat("HH:mm")).toBe("00:00");
   });
 });
+
+/**
+ * Deputy (the workforce scheduler) publishes every text property with a
+ * LANGUAGE parameter — `SUMMARY;LANGUAGE=en:Late shift`. That is ordinary
+ * RFC 5545, but node-ical surfaces a property carrying parameters as
+ * `{ params, val }` rather than as a bare string, so a `typeof === "string"`
+ * test discards the value silently. For SUMMARY that meant every event in the
+ * feed was dropped as "no title" and the whole calendar failed to sync.
+ *
+ * The fixture is a real Deputy feed with the tenant, token and personal
+ * details replaced, folding and all.
+ */
+describe("parseIcs on a Deputy feed (parameterised properties)", () => {
+  const deputy = fs.readFileSync(
+    path.resolve(import.meta.dirname, "fixtures/deputy.ics"),
+    "utf8",
+  );
+  const result = parseIcs(deputy, "America/Denver");
+
+  it("reads every event rather than skipping them as untitled", () => {
+    expect(result.problems).toEqual([]);
+    expect(result.events).toHaveLength(2);
+  });
+
+  it("unwraps SUMMARY from its LANGUAGE parameter", () => {
+    expect(result.events[0].summary).toBe("[E43] Idaho Falls Call Center");
+  });
+
+  it("unwraps DESCRIPTION and LOCATION too", () => {
+    expect(result.events[0].location).toBe("1 Example Street");
+    expect(result.events[0].description).toContain("Meal Break (Unpaid): 30 mins");
+  });
+
+  it("resolves DTSTART against the feed's own TZID, not the local zone", () => {
+    // DTSTART;TZID=America/Boise:20260728T143000 — 14:30 Mountain.
+    const start = DateTime.fromMillis(result.events[0].dtstart, { zone: "America/Denver" });
+    expect(start.toFormat("yyyy-MM-dd HH:mm")).toBe("2026-07-28 14:30");
+  });
+
+  it("keeps the source UID so re-syncs match rather than duplicate", () => {
+    expect(result.events[0].uid).toMatch(/^DEP-[0-9a-f]{32}-\d+$/);
+  });
+
+  it("does not mistake the VALARM for an event", () => {
+    expect(result.events.every((e) => e.summary.startsWith("[E43]"))).toBe(true);
+  });
+});

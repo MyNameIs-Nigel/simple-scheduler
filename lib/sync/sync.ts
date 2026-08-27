@@ -124,16 +124,31 @@ export async function syncCalendarSource(
     .where(eq(events.calendarId, calendar.id))
     .all() as EventRow[];
 
-  // A feed that parses to nothing is almost always a broken source — a
-  // truncated response, or a login page that happened to contain the word
-  // VCALENDAR. Emptying the calendar on that basis would quietly delete a
-  // month of shifts, so it is treated as a failure and nothing is touched.
-  if (parsed.events.length === 0 && existing.length > 0) {
-    const message =
-      parsed.problems[0] ??
-      "The source returned no events, so the existing ones were left alone.";
-    recordFailure(db, calendar.id, message, now);
-    return { ...empty(message), ok: false };
+  // A feed that yields no usable events is almost always a broken source — a
+  // truncated response, a login page that happened to contain the word
+  // VCALENDAR, or entries we could not read.
+  if (parsed.events.length === 0) {
+    // Entries were present but none survived parsing. That is a failure
+    // whatever the calendar currently holds: reporting "0 added" against an
+    // empty calendar would look like a clean sync of a genuinely empty
+    // schedule, which is exactly the wrong thing to believe.
+    if (parsed.problems.length > 0) {
+      const message =
+        parsed.problems.length === 1
+          ? parsed.problems[0]
+          : `${parsed.problems[0]} (${parsed.problems.length} entries could not be read)`;
+      recordFailure(db, calendar.id, message, now);
+      return { ...empty(message), ok: false };
+    }
+
+    // Nothing to read and nothing to complain about. Only suspicious if we
+    // already hold events — emptying a calendar on a silent response would
+    // quietly delete a month of shifts.
+    if (existing.length > 0) {
+      const message = "The source returned no events, so the existing ones were left alone.";
+      recordFailure(db, calendar.id, message, now);
+      return { ...empty(message), ok: false };
+    }
   }
 
   const byKey = new Map<string, ParsedEvent>();

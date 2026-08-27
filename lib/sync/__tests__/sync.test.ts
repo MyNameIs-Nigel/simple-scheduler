@@ -187,6 +187,39 @@ describe("syncCalendarSource", () => {
     expect(rows().map((r) => r.sourceUid)).toEqual(["shift-a@work"]);
   });
 
+  it("fails when entries were present but none could be read, even on an empty calendar", async () => {
+    // The Deputy failure mode. Reporting "0 added" here would look like a
+    // clean sync of a genuinely empty schedule, which is the wrong thing to
+    // believe about a feed that is actually full of shifts.
+    const untitled = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "BEGIN:VEVENT",
+      "UID:x@work",
+      "DTSTAMP:20260101T000000Z",
+      "DTSTART:20260302T140000Z",
+      "DTEND:20260302T220000Z",
+      "END:VEVENT",
+      "END:VCALENDAR",
+    ].join("\r\n");
+
+    expect(rows()).toHaveLength(0);
+
+    const outcome = await sync(untitled);
+
+    expect(outcome.ok).toBe(false);
+    expect(outcome.message).toMatch(/no title/i);
+    expect(calendar().lastSyncStatus).toBe("error");
+  });
+
+  it("reports a genuinely empty upstream calendar as a success", async () => {
+    // No entries and nothing to complain about, with nothing to lose locally.
+    const outcome = await sync(ics([]));
+
+    expect(outcome.ok).toBe(true);
+    expect(calendar().lastSyncStatus).not.toBe("error");
+  });
+
   it("refuses to empty a populated calendar when the source parses to nothing", async () => {
     await sync(ics([SHIFT_A, SHIFT_B]));
 

@@ -72,7 +72,7 @@ export function parseIcs(source: string, zone: string): ParseResult {
     // override, so they are deduplicated by their actual RECURRENCE-ID.
     skippedOverrides += countRecurrences(vevent);
 
-    const summary = typeof vevent.summary === "string" ? vevent.summary.trim() : "";
+    const summary = cleanString(vevent.summary) ?? "";
     if (!summary) {
       problems.push("Skipped an event with no title.");
       continue;
@@ -175,14 +175,30 @@ function isDateOnly(value: unknown): boolean {
   return Boolean(value && typeof value === "object" && "dateOnly" in value && (value as { dateOnly?: boolean }).dateOnly);
 }
 
+/**
+ * Reads a text property, whether or not it carries iCalendar parameters.
+ *
+ * A property with parameters — `SUMMARY;LANGUAGE=en:Late shift`, which is
+ * ordinary RFC 5545 and what Deputy emits for every field — is surfaced by
+ * node-ical as `{ params, val }` rather than as a bare string. Testing for a
+ * string alone silently discarded the value, which for SUMMARY meant every
+ * event in the feed was skipped as "no title".
+ */
 function cleanString(value: unknown): string | null {
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  return trimmed.length > 0 ? trimmed : null;
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 0 ? trimmed : null;
+  }
+
+  if (value !== null && typeof value === "object" && "val" in value) {
+    return cleanString((value as { val: unknown }).val);
+  }
+
+  return null;
 }
 
 function normaliseStatus(value: unknown): ParsedEvent["status"] {
-  const s = typeof value === "string" ? value.toUpperCase() : "";
+  const s = (cleanString(value) ?? "").toUpperCase();
   return s === "CANCELLED" || s === "TENTATIVE" ? s : "CONFIRMED";
 }
 
