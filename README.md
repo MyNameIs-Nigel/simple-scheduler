@@ -80,6 +80,15 @@ startup, before the server binds.
 `HOST_PORT` (default `3000`). Bind to the LAN address the edge machine reaches,
 or `127.0.0.1` if you ever colocate the tunnel.
 
+### Data directory permissions
+
+The container runs as uid 1001, while a bind-mounted `./data` arrives owned by
+whoever owns it on the host — usually root. The image's own `chown` cannot help,
+because Docker overlays the host directory and its ownership at start. So the
+entrypoint starts as root, fixes ownership on `/app/data`, and drops to uid 1001
+via `su-exec` before doing anything else. The server never runs as root, and no
+host-side `chown` is needed.
+
 ### Backups
 
 The mounted `data/` directory is the entire backup surface: the SQLite file plus

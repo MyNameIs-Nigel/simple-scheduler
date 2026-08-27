@@ -35,7 +35,8 @@ ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 ENV DATABASE_PATH=/app/data/scheduler.db
 
-RUN apk add --no-cache libc6-compat \
+# su-exec drops privileges in the entrypoint; see docker-entrypoint.sh.
+RUN apk add --no-cache libc6-compat su-exec \
  && addgroup -g 1001 -S nodejs \
  && adduser -u 1001 -S nextjs -G nodejs
 
@@ -68,9 +69,13 @@ RUN set -eu; \
     ln -sfn "$target" /app/node_modules/better-sqlite3; \
     node -e "require('better-sqlite3')"
 
+# This chown only covers the no-bind-mount case; a bind mount replaces the
+# directory at runtime, ownership included. The entrypoint handles that.
 RUN mkdir -p /app/data && chown -R nextjs:nodejs /app/data && chmod +x /app/docker-entrypoint.sh
 
-USER nextjs
+# Deliberately root: a bind-mounted ./data arrives with the host's ownership,
+# which the image cannot predict, so the entrypoint fixes it and then drops to
+# nextjs via su-exec. The server itself never runs as root.
 EXPOSE 3000
 VOLUME ["/app/data"]
 
