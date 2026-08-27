@@ -69,7 +69,7 @@ function rows() {
   return db.select().from(events).where(eq(events.calendarId, "cal_work")).all();
 }
 
-type Shift = { uid?: string; summary: string; start: string; end: string };
+type Shift = { uid?: string; summary: string; start: string; end: string; description?: string };
 
 function ics(shifts: Shift[]): string {
   const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//test//EN"];
@@ -80,6 +80,7 @@ function ics(shifts: Shift[]): string {
     lines.push(`DTSTART:${s.start}`);
     lines.push(`DTEND:${s.end}`);
     lines.push(`SUMMARY:${s.summary}`);
+    if (s.description) lines.push(`DESCRIPTION:${s.description}`);
     lines.push("END:VEVENT");
   }
   lines.push("END:VCALENDAR");
@@ -176,6 +177,29 @@ describe("syncCalendarSource", () => {
 
     expect(changed.sequence).toBe(before.find((r) => r.sourceUid === "shift-a@work")!.sequence + 1);
     expect(untouched.sequence).toBe(before.find((r) => r.sourceUid === "shift-b@work")!.sequence);
+  });
+
+  it("drops the description a subscribed source supplies", async () => {
+    // Deputy appends a deep link carrying the tenant hostname and the internal
+    // roster ID to every shift, and a mirrored calendar exists to be published.
+    const link = "Open in Deputy: https://tenant.na.deputy.com/#roster/record/21282";
+
+    await sync(ics([{ ...SHIFT_A, description: `Breaks: 30 mins\\n${link}` }]));
+
+    expect(rows()[0].description).toBeNull();
+  });
+
+  it("does not resequence when only the description changed upstream", async () => {
+    // The strip happens before the content hash, so a description-only edit is
+    // genuinely no change — bumping SEQUENCE would re-notify every subscriber
+    // about a field they can no longer see.
+    await sync(ics([{ ...SHIFT_A, description: "first" }]));
+    const before = rows()[0];
+
+    const outcome = await sync(ics([{ ...SHIFT_A, description: "second" }]));
+
+    expect(outcome.resequenced).toBe(0);
+    expect(rows()[0].sequence).toBe(before.sequence);
   });
 
   it("deletes an event that disappeared upstream", async () => {

@@ -144,6 +144,12 @@ publishers hand out) and it becomes a **read-only mirror** of that file:
   calendar being deleted and recreated on every poll.
 - `SEQUENCE` moves only when an event's visible content actually changed, so a
   poll every 30 minutes does not re-notify every subscriber of every event.
+- **Descriptions from the source are discarded.** Publishers bury tracking links
+  and internal identifiers there — Deputy appends a mobile deep link carrying the
+  tenant hostname and the roster ID to every shift — and a mirrored calendar
+  usually exists in order to be published, where anyone with the URL can read it.
+  Summary, location, times and recurrence are kept. The strip happens before the
+  content hash, so an upstream description-only edit is correctly no change.
 
 Two safety behaviours worth knowing, because both are silent otherwise:
 

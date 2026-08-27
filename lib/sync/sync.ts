@@ -67,6 +67,29 @@ function contentHashOf(entry: ParsedEvent): string {
 }
 
 /**
+ * Descriptions from a subscribed source are dropped, always.
+ *
+ * The prompt for this was Deputy, which appends a mobile deep link to every
+ * shift's DESCRIPTION: a couple of hundred unbroken characters carrying the
+ * tenant hostname and the internal roster ID. None of that is a credential,
+ * but a mirrored calendar is usually mirrored in order to be *published*, and
+ * a published .ics is readable by anyone holding the URL. What is left of such
+ * a description once the link is gone is typically boilerplate anyway
+ * ("Breaks: Meal Break (Unpaid): 30 mins").
+ *
+ * Applied before the content hash is taken, so an upstream edit that only
+ * touches the description is correctly seen as no change at all and does not
+ * move SEQUENCE. Summary, location, times and recurrence are untouched — the
+ * fields a schedule is actually read for.
+ *
+ * Hand-entered calendars keep their descriptions; this is only ever reached
+ * for a calendar with a source URL.
+ */
+function stripDescription(entry: ParsedEvent): ParsedEvent {
+  return entry.description === null ? entry : { ...entry, description: null };
+}
+
+/**
  * The key the sync matches on across polls.
  *
  * A UID is what the spec is for, but plenty of published feeds omit it. Falling
@@ -155,7 +178,7 @@ export async function syncCalendarSource(
   for (const entry of parsed.events) {
     // Last one wins on a duplicate key, matching how a client reading the file
     // top to bottom would resolve it.
-    byKey.set(sourceKeyOf(entry), entry);
+    byKey.set(sourceKeyOf(entry), stripDescription(entry));
   }
 
   const existingByKey = new Map<string, EventRow>();

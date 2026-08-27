@@ -129,7 +129,9 @@ export function CalendarForm({ calendar }: { calendar?: Calendar }) {
           Point this at a published .ics and the calendar becomes a{" "}
           <span className="text-fg">read-only mirror</span> of it, refreshed automatically.
           Its events can no longer be edited here — anything already on it is removed by the
-          first sync, and anything the source drops is removed on the next one.
+          first sync, and anything the source drops is removed on the next one. Descriptions
+          from the source are discarded, since publishers routinely bury tracking links and
+          internal IDs in them.
           <span className="mt-1 block">
             To publish these events alongside your own, put both calendars in a{" "}
             <span className="text-accent-1">feed</span>.
