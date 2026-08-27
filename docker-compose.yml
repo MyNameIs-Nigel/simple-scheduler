@@ -5,9 +5,14 @@
 # ingress rule to reach. Point the tunnel's service at http://<this-host>:3000.
 #
 # The image is pulled from GHCR, built and pushed by .github/workflows/publish.yml
-# on every push to main. To deploy:
+# on every push to main. Watchtower (below) then pulls and recreates the
+# container on its own, so a merge to main deploys itself.
 #
-#   docker compose pull && docker compose up -d
+# To deploy by hand, or after editing this file — Watchtower recreates a
+# container from its *existing* config and never re-reads this file, so a change
+# here still needs:
+#
+#   docker compose up -d
 #
 # Nothing is baked into the image, so a config change is an env edit plus a
 # restart — no rebuild.
@@ -31,11 +36,62 @@ services:
       SESSION_SECRET: ${SESSION_SECRET:?set SESSION_SECRET in .env}
       SCHEDULER_TIMEZONE: ${SCHEDULER_TIMEZONE:-America/New_York}
       DATABASE_PATH: /app/data/scheduler.db
+      # Subscribed calendars are re-fetched on this interval by the poller
+      # started in instrumentation.ts.
+      SYNC_ENABLED: ${SYNC_ENABLED:-true}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-30}
+      # Allow a subscription URL on the LAN. Off by default.
+      SYNC_ALLOW_PRIVATE_HOSTS: ${SYNC_ALLOW_PRIVATE_HOSTS:-false}
       # Container clock, so log timestamps read sensibly. Stored instants are
       # UTC regardless of this.
       TZ: ${SCHEDULER_TIMEZONE:-America/New_York}
+
+    labels:
+      # Watchtower only touches containers carrying this label — see the
+      # WATCHTOWER_LABEL_ENABLE note below.
+      com.centurylinklabs.watchtower.enable: "true"
 
     volumes:
       # The SQLite file plus its WAL and shared-memory index. This directory is
       # the entire backup surface.
       - ./data:/app/data
+
+  # Polls GHCR and redeploys the scheduler when a new image is published,
+  # replacing the manual `docker compose pull && up -d` after every merge.
+  #
+  # Two things worth being clear-eyed about:
+  #
+  #  - Mounting the Docker socket gives this container root-equivalent control
+  #    of the host. That is inherent to what Watchtower does; it cannot work
+  #    without it. It is an acceptable trade on a single-purpose box like this
+  #    one, and it is the reason for LABEL_ENABLE below.
+  #  - There is no approval step. A bad image reaching :latest is live within
+  #    one poll interval. The CI gate (lint + tests + build must pass before the
+  #    publish job runs) is what stands in for that.
+  #
+  # The image is public, so no registry credentials are needed. Were the repo
+  # ever made private, this would additionally need a mounted config.json
+  # holding a GHCR pull token.
+  watchtower:
+    image: containrrr/watchtower:latest
+    container_name: simple-scheduler-watchtower
+    restart: unless-stopped
+
+    environment:
+      # Only containers explicitly labelled above are considered. Without this
+      # Watchtower would update every container on the host, which is emphatically
+      # not what a scheduler deployment should be deciding.
+      WATCHTOWER_LABEL_ENABLE: "true"
+      # Delete the superseded image after a successful update, or the disk fills
+      # with one abandoned layer set per deploy.
+      WATCHTOWER_CLEANUP: "true"
+      # Left off deliberately. The only persistent state is the ./data bind
+      # mount, which is not a volume and so would not be affected either way —
+      # but "no" is the right default for anything that deletes data.
+      WATCHTOWER_REMOVE_VOLUMES: "false"
+      WATCHTOWER_POLL_INTERVAL: ${WATCHTOWER_POLL_INTERVAL:-300}
+      WATCHTOWER_INCLUDE_RESTARTING: "true"
+      TZ: ${SCHEDULER_TIMEZONE:-America/New_York}
+
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
