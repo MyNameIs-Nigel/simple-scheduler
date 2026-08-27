@@ -84,7 +84,12 @@ migrations run automatically at startup, before the server binds.
 
 Watchtower only touches containers carrying the
 `com.centurylinklabs.watchtower.enable` label, so nothing else on the host is in
-scope. Two things to be clear-eyed about: it needs the Docker socket, which is
+scope. It is pinned to `containrrr/watchtower:1.7.1` and carries
+`DOCKER_API_VERSION=1.48`: that release is from November 2023, the project is
+archived, and without the override it negotiates Docker API 1.25, which Engine
+29 refuses outright — the container crash-loops and nothing deploys, silently,
+because the app itself keeps running. `nickfedor/watchtower` is an actively
+maintained fork that needs no override, if this ever wants replacing. Two things to be clear-eyed about: it needs the Docker socket, which is
 root-equivalent access to the host, and there is no approval step — a bad image
 reaching `:latest` is live within one poll interval. The CI gate (lint, tests
 and a production build must pass before the publish job runs) stands in for that.
