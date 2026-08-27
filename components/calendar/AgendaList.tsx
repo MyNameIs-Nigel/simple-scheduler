@@ -74,14 +74,14 @@ export function AgendaList({
                           ? "All day"
                           : `${formatTime(event.start, zone)}–${formatTime(event.end, zone)}`}
                       </span>
-                      <span className="text-sm font-medium text-fg">{event.summary}</span>
+                      <span className="wrap-anywhere text-sm font-medium text-fg">{event.summary}</span>
                     </div>
 
                     {event.location && (
                       <p className="mt-1 truncate text-xs text-muted">{event.location}</p>
                     )}
                     {event.description && (
-                      <p className="mt-1 whitespace-pre-line text-xs leading-relaxed text-muted">
+                      <p className="mt-1 whitespace-pre-line wrap-anywhere text-xs leading-relaxed text-muted">
                         {event.description}
                       </p>
                     )}

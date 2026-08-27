@@ -115,7 +115,7 @@ function MirroredEvent({
         </p>
         {event.location && <p className="mt-2 text-xs text-muted">{event.location}</p>}
         {event.description && (
-          <p className="mt-2 whitespace-pre-line text-xs leading-relaxed text-muted">
+          <p className="mt-2 whitespace-pre-line wrap-anywhere text-xs leading-relaxed text-muted">
             {event.description}
           </p>
         )}
