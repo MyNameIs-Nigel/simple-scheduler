@@ -9,7 +9,9 @@ import { listCalendars } from "@/lib/events/queries";
 export const metadata = { title: "New event" };
 
 export default async function NewEventPage() {
-  const calendars = await listCalendars();
+  // Mirrored calendars are owned by their source: an event created on one
+  // would be deleted by the next sync, so they are not offered as a target.
+  const calendars = (await listCalendars()).filter((c) => !c.sourceUrl);
   // Nothing to attach an event to yet — send them to create a calendar first.
   if (calendars.length === 0) redirect("/admin/calendars/new");
 

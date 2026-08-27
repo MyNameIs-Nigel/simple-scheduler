@@ -9,8 +9,10 @@ import { siteUrl, timezone } from "@/lib/env";
 import { normaliseUtcStamps } from "./format";
 import {
   getCalendarBySlug,
+  getFeedBySlug,
   listAllEvents,
   listCalendars,
+  listFeedCalendars,
   listOverridesFor,
 } from "@/lib/events/queries";
 import type { Calendar, EventOverride, EventRow } from "@/db/schema";
@@ -46,7 +48,20 @@ function stripIcsSuffix(slug: string): string {
   return slug.replace(/\.ics$/i, "");
 }
 
-/** Resolves a feed slug to the calendars it covers. `all` = every public one. */
+/**
+ * Resolves a feed slug to the calendars it covers.
+ *
+ * Three kinds of slug share this one namespace, which is why db/mutations.ts
+ * enforces uniqueness across all of them:
+ *   `all`          every public calendar
+ *   a calendar     that calendar alone
+ *   a feed         the calendars its membership names
+ *
+ * A published feed intentionally ignores calendars.isPublic on its members: a
+ * subscription mirror can stay hidden from the public site while still being
+ * published as part of a combined feed. The feed's own isPublic is what gates
+ * it, and it is checked here.
+ */
 async function resolveCalendars(rawSlug: string): Promise<{ name: string; calendars: Calendar[] } | null> {
   const slug = stripIcsSuffix(rawSlug);
 
@@ -56,8 +71,18 @@ async function resolveCalendars(rawSlug: string): Promise<{ name: string; calend
   }
 
   const calendar = await getCalendarBySlug(slug);
-  if (!calendar || !calendar.isPublic) return null;
-  return { name: `Nigel Smith — ${calendar.name}`, calendars: [calendar] };
+  if (calendar) {
+    if (!calendar.isPublic) return null;
+    return { name: `Nigel Smith — ${calendar.name}`, calendars: [calendar] };
+  }
+
+  const feed = await getFeedBySlug(slug);
+  if (!feed || !feed.isPublic) return null;
+
+  const members = await listFeedCalendars(feed.id);
+  if (members.length === 0) return null;
+
+  return { name: `Nigel Smith — ${feed.name}`, calendars: members };
 }
 
 export async function buildFeed(rawSlug: string): Promise<IcsResult | null> {

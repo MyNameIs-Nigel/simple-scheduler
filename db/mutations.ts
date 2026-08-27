@@ -2,7 +2,13 @@ import { and, eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
 import type { BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 
-import { calendars, eventOverrides, events } from "./schema";
+import {
+  calendars,
+  eventOverrides,
+  events,
+  publishedFeedCalendars,
+  publishedFeeds,
+} from "./schema";
 import * as schema from "./schema";
 
 /**
@@ -170,6 +176,8 @@ export type SaveCalendarInput = {
   description?: string | null;
   accent: number;
   isPublic: boolean;
+  /** Non-null turns the calendar into a read-only mirror of a remote .ics. */
+  sourceUrl?: string | null;
 };
 
 export type SaveCalendarResult =
@@ -181,16 +189,9 @@ export function saveCalendarRecord(
   input: SaveCalendarInput,
   now = Date.now(),
 ): SaveCalendarResult {
-  // The slug is the public feed URL, so a collision would silently reroute a
-  // feed someone has already subscribed to.
-  const clash = db
-    .select({ id: calendars.id })
-    .from(calendars)
-    .where(eq(calendars.slug, input.slug))
-    .limit(1)
-    .all();
-
-  if (clash.length > 0 && clash[0].id !== input.id) return { ok: false, reason: "slug_taken" };
+  if (!isSlugAvailable(db, input.slug, { calendarId: input.id })) {
+    return { ok: false, reason: "slug_taken" };
+  }
 
   const shared = {
     name: input.name,
@@ -198,11 +199,41 @@ export function saveCalendarRecord(
     description: input.description || null,
     accent: input.accent,
     isPublic: input.isPublic,
+    sourceUrl: input.sourceUrl || null,
     updatedAt: now,
   };
 
   if (input.id) {
-    db.update(calendars).set(shared).where(eq(calendars.id, input.id)).run();
+    const [existing] = db
+      .select()
+      .from(calendars)
+      .where(eq(calendars.id, input.id))
+      .limit(1)
+      .all();
+
+    // Changing or clearing the source invalidates everything cached about the
+    // old one. Leaving a stale ETag behind would make the first sync against a
+    // new URL answer 304 and mirror nothing at all.
+    const sourceChanged = existing !== undefined && existing.sourceUrl !== shared.sourceUrl;
+
+    db.update(calendars)
+      .set(
+        sourceChanged
+          ? {
+              ...shared,
+              sourceEtag: null,
+              sourceLastModified: null,
+              lastSyncedAt: null,
+              lastSyncStatus: null,
+              lastSyncError: null,
+              lastSyncCount: null,
+              lastSyncSkipped: null,
+            }
+          : shared,
+      )
+      .where(eq(calendars.id, input.id))
+      .run();
+
     return { ok: true, id: input.id, created: false };
   }
 
@@ -214,4 +245,102 @@ export function saveCalendarRecord(
     .run();
 
   return { ok: true, id, created: true };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Published feeds                                                            */
+/* -------------------------------------------------------------------------- */
+
+/** Reserved for the combined feed of every public calendar. */
+export const RESERVED_SLUGS = new Set(["all"]);
+
+/**
+ * Calendars, feeds and the reserved word `all` all resolve through
+ * /calendars/<slug>.ics, so they share one namespace and a clash would silently
+ * reroute a URL somebody has already subscribed to. A unique index per table
+ * cannot see across that, which is why this is checked in code.
+ */
+export function isSlugAvailable(
+  db: Db,
+  slug: string,
+  exclude: { calendarId?: string; feedId?: string } = {},
+): boolean {
+  if (RESERVED_SLUGS.has(slug)) return false;
+
+  const calendarClash = db
+    .select({ id: calendars.id })
+    .from(calendars)
+    .where(eq(calendars.slug, slug))
+    .limit(1)
+    .all();
+  if (calendarClash.length > 0 && calendarClash[0].id !== exclude.calendarId) return false;
+
+  const feedClash = db
+    .select({ id: publishedFeeds.id })
+    .from(publishedFeeds)
+    .where(eq(publishedFeeds.slug, slug))
+    .limit(1)
+    .all();
+  if (feedClash.length > 0 && feedClash[0].id !== exclude.feedId) return false;
+
+  return true;
+}
+
+export type SaveFeedInput = {
+  id?: string;
+  name: string;
+  slug: string;
+  description?: string | null;
+  isPublic: boolean;
+  calendarIds: string[];
+};
+
+export type SaveFeedResult =
+  | { ok: true; id: string; created: boolean }
+  | { ok: false; reason: "slug_taken" | "no_calendars" };
+
+export function saveFeedRecord(
+  db: Db,
+  input: SaveFeedInput,
+  now = Date.now(),
+): SaveFeedResult {
+  if (!isSlugAvailable(db, input.slug, { feedId: input.id })) {
+    return { ok: false, reason: "slug_taken" };
+  }
+
+  // An empty feed is a valid .ics but a useless URL, and almost always means
+  // the checkboxes were missed rather than that an empty feed was wanted.
+  const calendarIds = [...new Set(input.calendarIds)].filter(Boolean);
+  if (calendarIds.length === 0) return { ok: false, reason: "no_calendars" };
+
+  const shared = {
+    name: input.name,
+    slug: input.slug,
+    description: input.description || null,
+    isPublic: input.isPublic,
+    updatedAt: now,
+  };
+
+  const id = input.id ?? `feed_${nanoid(12)}`;
+  const created = !input.id;
+
+  db.transaction((tx) => {
+    if (created) {
+      const count = tx.select({ id: publishedFeeds.id }).from(publishedFeeds).all().length;
+      tx.insert(publishedFeeds)
+        .values({ id, sortOrder: count, createdAt: now, ...shared })
+        .run();
+    } else {
+      tx.update(publishedFeeds).set(shared).where(eq(publishedFeeds.id, id)).run();
+    }
+
+    // Membership is small and fully specified by the form, so replacing it
+    // wholesale is simpler than diffing and cannot leave a stale row behind.
+    tx.delete(publishedFeedCalendars).where(eq(publishedFeedCalendars.feedId, id)).run();
+    for (const calendarId of calendarIds) {
+      tx.insert(publishedFeedCalendars).values({ feedId: id, calendarId }).run();
+    }
+  });
+
+  return { ok: true, id, created };
 }

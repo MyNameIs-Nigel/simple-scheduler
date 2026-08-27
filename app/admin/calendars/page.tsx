@@ -1,10 +1,13 @@
 import Link from "next/link";
 
-import { deleteCalendar } from "@/app/admin/actions";
+import { deleteCalendar, syncCalendarNow } from "@/app/admin/actions";
 import { accentDot } from "@/lib/accents";
 import { siteUrl } from "@/lib/env";
 import { listCalendars, listEventsForCalendar } from "@/lib/events/queries";
+import { requestNow } from "@/lib/now";
+import { formatRelative } from "@/lib/time";
 import { btnPrimary } from "@/lib/ui";
+import type { Calendar } from "@/db/schema";
 import type { Accent } from "@/types";
 
 export const metadata = { title: "Calendars" };
@@ -14,6 +17,7 @@ export default async function CalendarsPage() {
   const counts = await Promise.all(
     calendars.map(async (c) => (await listEventsForCalendar(c.id)).length),
   );
+  const now = await requestNow();
 
   return (
     <div>
@@ -48,6 +52,11 @@ export default async function CalendarsPage() {
                       private
                     </span>
                   )}
+                  {calendar.sourceUrl && (
+                    <span className="rounded-full border border-accent-4/25 bg-accent-4/10 px-2 py-0.5 font-mono text-[10px] text-accent-4">
+                      subscribed
+                    </span>
+                  )}
                   <span className="font-mono text-[10px] text-muted">
                     {counts[i]} event{counts[i] === 1 ? "" : "s"}
                   </span>
@@ -58,9 +67,21 @@ export default async function CalendarsPage() {
                 >
                   /calendars/{calendar.slug}.ics
                 </a>
+                {calendar.sourceUrl && <SyncStatus calendar={calendar} now={now} />}
               </div>
 
               <div className="flex shrink-0 gap-2">
+                {calendar.sourceUrl && (
+                  <form action={syncCalendarNow}>
+                    <input type="hidden" name="id" value={calendar.id} />
+                    <button
+                      type="submit"
+                      className="rounded-lg border border-border px-3 py-1 text-xs text-muted transition-colors duration-200 hover:border-accent-4/50 hover:text-accent-4"
+                    >
+                      Sync now
+                    </button>
+                  </form>
+                )}
                 <Link
                   href={`/admin/calendars/${calendar.id}`}
                   className="rounded-lg border border-border px-3 py-1 text-xs text-fg transition-colors duration-200 hover:border-accent-1/50 hover:text-accent-1"
@@ -88,4 +109,49 @@ export default async function CalendarsPage() {
       </p>
     </div>
   );
+}
+
+/**
+ * Where a subscribed calendar stands: when it last synced, how much it holds,
+ * and — the part worth being loud about — why it last failed.
+ */
+function SyncStatus({ calendar, now }: { calendar: Calendar; now: number }) {
+  const host = hostOf(calendar.sourceUrl!);
+
+  if (calendar.lastSyncStatus === "error") {
+    return (
+      <p className="mt-1 font-mono text-[10px] leading-relaxed text-accent-2">
+        {host} — sync failed
+        {calendar.lastSyncedAt !== null && ` ${formatRelative(calendar.lastSyncedAt, now)}`}:{" "}
+        {calendar.lastSyncError}
+        {/* The events are whatever the last good sync left; a failure never
+            removes them. */}
+        {calendar.lastSyncCount !== null && (
+          <span className="text-muted"> · showing {calendar.lastSyncCount} from before</span>
+        )}
+      </p>
+    );
+  }
+
+  if (calendar.lastSyncedAt === null) {
+    return (
+      <p className="mt-1 font-mono text-[10px] text-muted">{host} — not synced yet</p>
+    );
+  }
+
+  return (
+    <p className="mt-1 font-mono text-[10px] text-muted">
+      {host} — synced {formatRelative(calendar.lastSyncedAt, now)}
+      {calendar.lastSyncCount !== null && ` · ${calendar.lastSyncCount} events`}
+      {calendar.lastSyncSkipped ? ` · ${calendar.lastSyncSkipped} skipped` : ""}
+    </p>
+  );
+}
+
+function hostOf(url: string): string {
+  try {
+    return new URL(url.replace(/^webcals?:\/\//i, "https://")).host;
+  } catch {
+    return url;
+  }
 }

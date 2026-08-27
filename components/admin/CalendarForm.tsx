@@ -112,6 +112,32 @@ export function CalendarForm({ calendar }: { calendar?: Calendar }) {
         </span>
       </label>
 
+      <div className="border-t border-border pt-5">
+        <label className={label} htmlFor="sourceUrl">
+          Subscription URL
+          <span className="ml-2 font-normal normal-case tracking-normal text-muted">optional</span>
+        </label>
+        <input
+          id="sourceUrl"
+          name="sourceUrl"
+          type="url"
+          defaultValue={calendar?.sourceUrl ?? ""}
+          className={`${input} font-mono`}
+          placeholder="https://example.com/schedule.ics"
+        />
+        <p className="mt-1.5 text-xs leading-relaxed text-muted">
+          Point this at a published .ics and the calendar becomes a{" "}
+          <span className="text-fg">read-only mirror</span> of it, refreshed automatically.
+          Its events can no longer be edited here — anything already on it is removed by the
+          first sync, and anything the source drops is removed on the next one.
+          <span className="mt-1 block">
+            To publish these events alongside your own, put both calendars in a{" "}
+            <span className="text-accent-1">feed</span>.
+          </span>
+        </p>
+        <FieldError message={state.errors?.sourceUrl} />
+      </div>
+
       <div className="flex gap-2 pt-2">
         <button type="submit" disabled={pending} className={btnPrimary}>
           {pending ? "Saving…" : calendar ? "Save changes" : "Create calendar"}

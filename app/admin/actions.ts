@@ -10,20 +10,24 @@ import {
   restoreOccurrenceRecord,
   saveCalendarRecord,
   saveEventRecord,
+  saveFeedRecord,
   skipOccurrenceRecord,
 } from "@/db/mutations";
-import { calendars, events } from "@/db/schema";
+import { calendars, events, publishedFeeds } from "@/db/schema";
 import { requireAdmin } from "@/lib/auth/dal";
 import { siteUrl, timezone } from "@/lib/env";
 import { buildRRule } from "@/lib/events/rrule";
 import {
   calendarSchema,
   eventSchema,
+  feedSchema,
   zodErrors,
   type ActionState,
 } from "@/lib/events/validation";
 import { fromDateInput, fromLocalInput } from "@/lib/time";
 import { parseIcs } from "@/lib/ics/import";
+import { validateSourceUrl } from "@/lib/sync/fetch";
+import { syncCalendarById } from "@/lib/sync/runner";
 
 /**
  * Every action begins with `await requireAdmin()`.
@@ -38,7 +42,37 @@ function refresh() {
   revalidatePath("/admin");
   revalidatePath("/admin/events");
   revalidatePath("/admin/calendars");
+  revalidatePath("/admin/feeds");
 }
+
+/**
+ * True when the calendar mirrors a remote .ics and therefore owns its events.
+ *
+ * Checked in every mutating action rather than only in the UI: a Server Action
+ * is reachable by direct POST whatever the page rendered, and an edit that
+ * slipped through would be silently reverted by the next sync anyway.
+ */
+async function isMirrored(calendarId: string): Promise<boolean> {
+  const [calendar] = await db
+    .select({ sourceUrl: calendars.sourceUrl })
+    .from(calendars)
+    .where(eq(calendars.id, calendarId))
+    .limit(1);
+  return Boolean(calendar?.sourceUrl);
+}
+
+/** The calendar an existing event belongs to, or null if the event is gone. */
+async function calendarIdOfEvent(eventId: string): Promise<string | null> {
+  const [event] = await db
+    .select({ calendarId: events.calendarId })
+    .from(events)
+    .where(eq(events.id, eventId))
+    .limit(1);
+  return event?.calendarId ?? null;
+}
+
+const MIRROR_REFUSAL =
+  "That calendar mirrors a subscription URL, so its events are read-only. Change it at the source.";
 
 function fail(message: string, errors?: Record<string, string>): ActionState {
   return { ok: false, message, errors };
@@ -61,11 +95,20 @@ export async function saveCalendar(
     description: formData.get("description") ?? "",
     accent: formData.get("accent") ?? 1,
     isPublic: formData.get("isPublic") === "on" || formData.get("isPublic") === "true",
+    sourceUrl: formData.get("sourceUrl") ?? "",
   });
 
   if (!parsed.success) return fail("Please fix the highlighted fields.", zodErrors(parsed.error));
 
-  const result = saveCalendarRecord(db, { id: id || undefined, ...parsed.data });
+  const sourceUrl = parsed.data.sourceUrl?.trim() || null;
+  if (sourceUrl) {
+    // Same check the fetcher applies, run here so a bad URL is rejected at the
+    // form rather than surfacing 30 minutes later as a sync error.
+    const validated = validateSourceUrl(sourceUrl);
+    if (!validated.ok) return fail(validated.message, { sourceUrl: validated.message });
+  }
+
+  const result = saveCalendarRecord(db, { id: id || undefined, ...parsed.data, sourceUrl });
   if (!result.ok) return fail("That slug is already in use.", { slug: "Already in use" });
 
   refresh();
@@ -92,6 +135,16 @@ export async function saveEvent(_prev: ActionState, formData: FormData): Promise
 
   const zone = timezone();
   const id = String(formData.get("id") ?? "").trim();
+
+  // Both the target calendar and, on an edit, the one the event currently sits
+  // on: neither may be a mirror, or the save would be moving an event into or
+  // out of rows the sync owns.
+  const targetCalendarId = String(formData.get("calendarId") ?? "");
+  if (targetCalendarId && (await isMirrored(targetCalendarId))) return fail(MIRROR_REFUSAL);
+  if (id) {
+    const current = await calendarIdOfEvent(id);
+    if (current && (await isMirrored(current))) return fail(MIRROR_REFUSAL);
+  }
   const allDay = formData.get("allDay") === "on" || formData.get("allDay") === "true";
 
   const parsed = eventSchema.safeParse({
@@ -175,6 +228,9 @@ export async function deleteEvent(formData: FormData): Promise<void> {
   const id = String(formData.get("id") ?? "");
   if (!id) return;
 
+  const calendarId = await calendarIdOfEvent(id);
+  if (calendarId && (await isMirrored(calendarId))) return;
+
   await db.delete(events).where(eq(events.id, id));
   refresh();
   redirect("/admin/events");
@@ -192,6 +248,9 @@ export async function skipOccurrence(formData: FormData): Promise<void> {
   const recurrenceId = Number(formData.get("recurrenceId"));
   if (!eventId || !Number.isFinite(recurrenceId)) return;
 
+  const calendarId = await calendarIdOfEvent(eventId);
+  if (calendarId && (await isMirrored(calendarId))) return;
+
   skipOccurrenceRecord(db, eventId, recurrenceId);
 
   refresh();
@@ -204,6 +263,9 @@ export async function restoreOccurrence(formData: FormData): Promise<void> {
   const eventId = String(formData.get("eventId") ?? "");
   const recurrenceId = Number(formData.get("recurrenceId"));
   if (!eventId || !Number.isFinite(recurrenceId)) return;
+
+  const calendarId = await calendarIdOfEvent(eventId);
+  if (calendarId && (await isMirrored(calendarId))) return;
 
   restoreOccurrenceRecord(db, eventId, recurrenceId);
 
@@ -232,6 +294,11 @@ export async function importIcs(_prev: ActionState, formData: FormData): Promise
     .where(eq(calendars.id, calendarId))
     .limit(1);
   if (!calendar) return fail("That calendar no longer exists.");
+  if (calendar.sourceUrl) {
+    return fail(
+      "That calendar mirrors a subscription URL. Its events come from the source, so an upload would be wiped by the next sync.",
+    );
+  }
 
   const file = formData.get("file");
   if (!(file instanceof File) || file.size === 0) return fail("Choose a .ics file to import.");
@@ -311,4 +378,74 @@ export async function importIcs(_prev: ActionState, formData: FormData): Promise
   }
 
   return { ok: true, message: `Imported into ${calendar.name}: ${notes.join(", ")}.` };
+}
+
+/* -------------------------------------------------------------------------- */
+/* Published feeds                                                            */
+/* -------------------------------------------------------------------------- */
+
+export async function saveFeed(_prev: ActionState, formData: FormData): Promise<ActionState> {
+  await requireAdmin();
+
+  const id = String(formData.get("id") ?? "").trim();
+  const parsed = feedSchema.safeParse({
+    name: formData.get("name"),
+    slug: formData.get("slug"),
+    description: formData.get("description") ?? "",
+    isPublic: formData.get("isPublic") === "on" || formData.get("isPublic") === "true",
+    calendarIds: formData.getAll("calendarIds").map(String),
+  });
+
+  if (!parsed.success) return fail("Please fix the highlighted fields.", zodErrors(parsed.error));
+
+  const result = saveFeedRecord(db, { id: id || undefined, ...parsed.data });
+  if (!result.ok) {
+    return result.reason === "slug_taken"
+      ? fail("That slug is already in use by a calendar or another feed.", {
+          slug: "Already in use",
+        })
+      : fail("Pick at least one calendar.", { calendarIds: "Pick at least one calendar" });
+  }
+
+  refresh();
+  redirect("/admin/feeds");
+}
+
+export async function deleteFeed(formData: FormData): Promise<void> {
+  await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+  if (!id) return;
+
+  // Membership rows cascade; the member calendars and their events are untouched.
+  await db.delete(publishedFeeds).where(eq(publishedFeeds.id, id));
+  refresh();
+  redirect("/admin/feeds");
+}
+
+/* -------------------------------------------------------------------------- */
+/* Subscription sync                                                          */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * Fetches one subscribed calendar immediately, ignoring its poll interval.
+ *
+ * Awaited rather than fired off in the background: the point of the button is
+ * to see the result, and the outcome is rendered from the calendar's own
+ * lastSync* columns once the page revalidates.
+ */
+export async function syncCalendarNow(formData: FormData): Promise<void> {
+  await requireAdmin();
+  const id = String(formData.get("id") ?? "");
+  if (!id) return;
+
+  try {
+    await syncCalendarById(id);
+  } catch (error) {
+    // syncCalendarSource records its own failures; this only catches the
+    // unexpected, and a thrown Server Action would render an error page over
+    // what is a recoverable condition.
+    console.error("[sync] manual sync failed:", error);
+  }
+
+  refresh();
 }

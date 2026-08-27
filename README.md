@@ -8,6 +8,8 @@ that can drift out of sync with what you edited.
 
 - **Public** — month, week and agenda views at `/`
 - **Subscribable** — `/calendars/<slug>.ics` per calendar, `/calendars/all.ics` combined
+- **Subscribed calendars** — mirror a remote `.ics` URL, refreshed automatically
+- **Published feeds** — merge any set of calendars into one subscribable URL
 - **Admin** — Google SSO, restricted to one address, at `/admin`
 - **Recurring events** — full RRULE with per-occurrence skips and edits
 - **Import** — seed from an existing `.ics` export
@@ -32,6 +34,9 @@ without a rebuild.
 | `SITE_URL` | yes | Public origin, no trailing slash. Used for OAuth redirects, feed URLs and event UIDs. |
 | `SCHEDULER_TIMEZONE` | no | IANA zone for display and `.ics` output. Default `UTC`. |
 | `DATABASE_PATH` | no | SQLite file. Default `./data/scheduler.db`. |
+| `SYNC_ENABLED` | no | Background poller for subscribed calendars. Default `true`. |
+| `SYNC_INTERVAL_MINUTES` | no | How often a subscribed calendar is re-fetched. Default `30`. |
+| `SYNC_ALLOW_PRIVATE_HOSTS` | no | Allow subscription URLs on a private network. Default `false`. |
 
 Invalid configuration fails at boot with a message naming the offending
 variable, rather than surfacing at the first sign-in.
@@ -67,14 +72,27 @@ git clone https://github.com/MyNameIs-Nigel/simple-scheduler.git
 cd simple-scheduler
 cp .env.example .env   # then fill it in
 
-# Deploy, and re-run on every release
-docker compose pull && docker compose up -d
+# Bring the stack up
+docker compose up -d
 ```
 
-To have a merge to `main` deploy itself, point a webhook receiver on the host at
-those two commands. Because state lives entirely in the mounted `./data`
-directory, a redeploy is just a container swap — migrations run automatically at
-startup, before the server binds.
+After that, a merge to `main` deploys itself: the stack includes **Watchtower**,
+which polls GHCR every `WATCHTOWER_POLL_INTERVAL` seconds (default 300) and
+recreates the container when a new image is published. Because state lives
+entirely in the mounted `./data` directory, that is just a container swap —
+migrations run automatically at startup, before the server binds.
+
+Watchtower only touches containers carrying the
+`com.centurylinklabs.watchtower.enable` label, so nothing else on the host is in
+scope. Two things to be clear-eyed about: it needs the Docker socket, which is
+root-equivalent access to the host, and there is no approval step — a bad image
+reaching `:latest` is live within one poll interval. The CI gate (lint, tests
+and a production build must pass before the publish job runs) stands in for that.
+
+Watchtower recreates a container from its *existing* config and never re-reads
+`docker-compose.yml`, so a change to that file still needs `docker compose up -d`
+by hand. `docker compose pull && docker compose up -d` also still works if you
+want to force a deploy immediately.
 
 `docker-compose.yml` also honours `BIND_ADDRESS` (default `0.0.0.0`) and
 `HOST_PORT` (default `3000`). Bind to the LAN address the edge machine reaches,
@@ -94,6 +112,65 @@ host-side `chown` is needed.
 The mounted `data/` directory is the entire backup surface: the SQLite file plus
 its `-wal` and `-shm` siblings. Copy it with the container stopped, or use
 `sqlite3 scheduler.db ".backup 'out.db'"` while it runs.
+
+---
+
+## Subscribed calendars and published feeds
+
+These two features are separate, and they compose. Together they answer "my work
+shifts are published at a URL, my meetings are not, and I want one calendar with
+both."
+
+### Subscribing to a calendar
+
+Give a calendar a **subscription URL** (`https://`, or the `webcal://` form most
+publishers hand out) and it becomes a **read-only mirror** of that file:
+
+- Events are fetched every `SYNC_INTERVAL_MINUTES`, plus on demand from the
+  **Sync now** button on `/admin/calendars`.
+- The poller sends `If-None-Match` / `If-Modified-Since`, so the steady state is
+  a `304` and no work at all.
+- The source owns the calendar completely. Its events cannot be edited in the
+  admin GUI, anything already on the calendar is removed by the first sync, and
+  anything the source drops is removed on the next one. The Server Actions
+  enforce this themselves, not just the UI.
+- Published `UID`s are **ours**, never the source's. Some publishers regenerate
+  UIDs on every export, and echoing those out would show subscribers the whole
+  calendar being deleted and recreated on every poll.
+- `SEQUENCE` moves only when an event's visible content actually changed, so a
+  poll every 30 minutes does not re-notify every subscriber of every event.
+
+Two safety behaviours worth knowing, because both are silent otherwise:
+
+- A source that parses to **zero events** while the calendar holds some is
+  treated as a failure, not as an empty calendar. A truncated response or an
+  expired link serving a login page must not delete a month of shifts.
+- A failed sync leaves the mirrored events exactly as they were and records the
+  reason on `/admin/calendars`.
+
+Subscription URLs on a private network (`localhost`, `10.x`, `192.168.x`, a NAS
+on the LAN) are refused unless `SYNC_ALLOW_PRIVATE_HOSTS=true`, so a mistyped
+address cannot make the server fetch something on its own network.
+
+### Publishing a merged feed
+
+A **feed** (`/admin/feeds`) maps a slug to a set of calendars and serves them as
+one `.ics`:
+
+```
+/calendars/work-shifts.ics    shifts only     (subscribed, mirrored)
+/calendars/meetings.ics       your own events
+/calendars/work-combined.ics  BOTH, one feed  ← hand this one out
+/calendars/all.ics            every public calendar
+```
+
+A calendar in a feed is published there **even when it is marked private**. That
+is the point: the raw mirror can stay off the public site while its events still
+reach the feed. Only the feed's own public toggle hides the feed.
+
+Calendar slugs, feed slugs and the reserved word `all` share one namespace, since
+all three resolve through `/calendars/<slug>.ics`. Uniqueness is checked across
+all of them.
 
 ---
 
@@ -129,14 +206,21 @@ node --env-file=.env.local scripts/dev-seed.mjs
 
 **Storage.** All instants are UTC epoch milliseconds. Conversion into
 `SCHEDULER_TIMEZONE` happens only at the edges — the calendar UI and the `.ics`
-writer. Three tables: `calendars`, `events`, and `event_overrides` (per-occurrence
-edits, keyed by `RECURRENCE-ID`).
+writer. Five tables: `calendars`, `events`, `event_overrides` (per-occurrence
+edits, keyed by `RECURRENCE-ID`), and `published_feeds` with its
+`published_feed_calendars` membership join.
 
 **Recurrence.** The `rrule` library has no timezone awareness, so expansion runs
 in "floating UTC": local wall-clock components go in, the zone is reattached on
 the way out. Without that a weekly 14:00 meeting drifts by an hour across a DST
 boundary. `UNTIL` is stored and emitted as UTC, per RFC 5545, and converted to
 the same floating basis before comparison.
+
+**Syncing.** The poller is started from `instrumentation.ts` when the server
+boots, and lives in the server process — correct for a single container, and the
+thing that would have to move first if this were ever scaled out. `register()`
+only schedules; awaiting a network fetch there would delay every deploy by
+however long the slowest remote calendar takes to answer.
 
 **Feeds.** Generated per request from the database — never written to disk, so
 an admin edit is live immediately with no file to fall out of sync. Timed events

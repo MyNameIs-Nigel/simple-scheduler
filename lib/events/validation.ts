@@ -11,15 +11,42 @@ export const slugSchema = z
   // `all` is the combined feed; a calendar with that slug would be unreachable.
   .refine((s) => s !== "all", { message: "`all` is reserved for the combined feed" });
 
+/**
+ * A subscription URL. Empty string means "not a mirror" and is normalised to
+ * null by the action, so the form can post a cleared field.
+ *
+ * webcal:// is accepted because that is the scheme most publishers hand out;
+ * lib/sync/fetch.ts rewrites it to https before fetching.
+ */
+export const sourceUrlSchema = z
+  .string()
+  .trim()
+  .max(2048)
+  .refine((v) => v === "" || /^(https?|webcals?):\/\/\S+$/i.test(v), {
+    message: "Must be an http://, https:// or webcal:// URL",
+  })
+  .optional();
+
 export const calendarSchema = z.object({
   name: z.string().trim().min(1, "Name is required").max(120),
   slug: slugSchema,
   description: z.string().trim().max(500).optional().or(z.literal("")),
   accent: z.coerce.number().int().min(1).max(4),
   isPublic: z.coerce.boolean(),
+  sourceUrl: sourceUrlSchema,
 });
 
 export type CalendarInput = z.infer<typeof calendarSchema>;
+
+export const feedSchema = z.object({
+  name: z.string().trim().min(1, "Name is required").max(120),
+  slug: slugSchema,
+  description: z.string().trim().max(500).optional().or(z.literal("")),
+  isPublic: z.coerce.boolean(),
+  calendarIds: z.array(z.string().min(1)).min(1, "Pick at least one calendar"),
+});
+
+export type FeedInput = z.infer<typeof feedSchema>;
 
 export const recurrenceSchema = z.object({
   freq: z.enum(["none", "daily", "weekly", "monthly", "yearly"]),

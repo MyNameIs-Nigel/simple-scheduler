@@ -8,7 +8,12 @@ import { ViewNav } from "@/components/calendar/ViewNav";
 import { WeekGrid } from "@/components/calendar/WeekGrid";
 import { siteUrl, timezone } from "@/lib/env";
 import { expandOccurrences, groupByDay, indexCalendars } from "@/lib/events/expand";
-import { listCalendars, listEventsInRange, listOverridesFor } from "@/lib/events/queries";
+import {
+  listCalendars,
+  listEventsInRange,
+  listFeeds,
+  listOverridesFor,
+} from "@/lib/events/queries";
 import {
   hrefFor,
   parseAnchor,
@@ -43,6 +48,7 @@ export default async function SchedulePage(props: PageProps<"/">) {
   const query = queryWindowFor(view, anchor, zone);
 
   const calendars = await listCalendars({ publicOnly: true });
+  const publishedFeeds = await listFeeds({ publicOnly: true });
   const calendarIds = calendars.map((c) => c.id);
 
   const events = await listEventsInRange({
@@ -65,7 +71,15 @@ export default async function SchedulePage(props: PageProps<"/">) {
   const today = todayIso(zone);
   const currentIso = DateTime.fromMillis(anchor, { zone }).toFormat("yyyy-MM-dd");
 
+  // Feeds first: a merged feed is the URL worth handing out, since it is the
+  // one that carries everything in a single subscription.
   const feeds = [
+    ...publishedFeeds.map((f) => ({
+      slug: f.slug,
+      name: f.name,
+      accent: 1 as Accent,
+      url: `${siteUrl()}/calendars/${f.slug}.ics`,
+    })),
     {
       slug: "all",
       name: "All",

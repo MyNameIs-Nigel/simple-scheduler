@@ -86,23 +86,34 @@ export default async function EventsPage(props: PageProps<"/admin/events">) {
                   </p>
                 </div>
 
-                <div className="flex shrink-0 gap-2">
-                  <Link
-                    href={`/admin/events/${event.id}`}
-                    className="rounded-lg border border-border px-3 py-1 text-xs text-fg transition-colors duration-200 hover:border-accent-1/50 hover:text-accent-1"
+                {/* A mirrored calendar's events belong to its source, so there
+                    is nothing to offer here but the reason why. */}
+                {calendar?.sourceUrl ? (
+                  <span
+                    className="shrink-0 rounded-lg border border-border px-3 py-1 font-mono text-[10px] text-muted"
+                    title={`Synced from ${calendar.sourceUrl}`}
                   >
-                    Edit
-                  </Link>
-                  <form action={deleteEvent}>
-                    <input type="hidden" name="id" value={event.id} />
-                    <button
-                      type="submit"
-                      className="rounded-lg border border-border px-3 py-1 text-xs text-muted transition-colors duration-200 hover:border-red-500/50 hover:text-red-400"
+                    🔒 synced
+                  </span>
+                ) : (
+                  <div className="flex shrink-0 gap-2">
+                    <Link
+                      href={`/admin/events/${event.id}`}
+                      className="rounded-lg border border-border px-3 py-1 text-xs text-fg transition-colors duration-200 hover:border-accent-1/50 hover:text-accent-1"
                     >
-                      Delete
-                    </button>
-                  </form>
-                </div>
+                      Edit
+                    </Link>
+                    <form action={deleteEvent}>
+                      <input type="hidden" name="id" value={event.id} />
+                      <button
+                        type="submit"
+                        className="rounded-lg border border-border px-3 py-1 text-xs text-muted transition-colors duration-200 hover:border-red-500/50 hover:text-red-400"
+                      >
+                        Delete
+                      </button>
+                    </form>
+                  </div>
+                )}
               </li>
             );
           })}

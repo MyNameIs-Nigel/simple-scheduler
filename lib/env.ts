@@ -20,6 +20,14 @@ const serverSchema = z.object({
   SITE_URL: z.url("SITE_URL must be an absolute URL"),
   SCHEDULER_TIMEZONE: z.string().min(1).default("UTC"),
   DATABASE_PATH: z.string().min(1).default("./data/scheduler.db"),
+  // Optional with defaults on purpose: this schema throws on boot, so making
+  // either of these required would stop the running container from restarting
+  // after a `docker compose pull` until the .env on the host caught up.
+  SYNC_ENABLED: z
+    .enum(["true", "false"])
+    .default("true")
+    .transform((v) => v === "true"),
+  SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(5).max(1440).default(30),
 });
 
 export type ServerEnv = z.infer<typeof serverSchema>;
@@ -55,4 +63,16 @@ export function timezone(): string {
 export function isAdminEmail(email: string | undefined | null): boolean {
   if (!email) return false;
   return email.trim().toLowerCase() === env().ADMIN_EMAIL.trim().toLowerCase();
+}
+
+/** How often a subscribed calendar is re-fetched. */
+export function syncIntervalMs(): number {
+  const raw = Number(process.env.SYNC_INTERVAL_MINUTES);
+  const minutes = Number.isFinite(raw) && raw >= 5 && raw <= 1440 ? raw : 30;
+  return minutes * 60 * 1000;
+}
+
+/** False disables the background poller entirely — used by CI and the test run. */
+export function syncEnabled(): boolean {
+  return (process.env.SYNC_ENABLED ?? "true") !== "false";
 }
