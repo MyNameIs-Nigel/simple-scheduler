@@ -152,4 +152,3 @@ These decisions were settled during the implementation based on the principles o
 
 5. **What happens to tokens on restore-from-backup?**
    - **Decision:** Tokens live in the SQLite database and restore with it. However, the admin dashboard (`/admin/mcp`) provides instant single-click revocation of active token families and a button to prune stale data. Furthermore, any detected refresh token reuse automatically revokes the entire token family immediately.
-
