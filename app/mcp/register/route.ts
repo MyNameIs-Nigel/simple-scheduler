@@ -1,13 +1,36 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { mcpEnabled } from "@/lib/env";
-import { isAllowedRedirectUri, registerMcpClient } from "@/lib/mcp/oauth";
+import { isAllowedRedirectUri, pruneExpiredOAuthData, registerMcpClient } from "@/lib/mcp/oauth";
+import { checkRateLimit } from "@/lib/mcp/hardening";
 
 export async function POST(request: NextRequest) {
   if (!mcpEnabled()) {
     return new NextResponse("Not Found", { status: 404 });
   }
 
-  let body: any;
+  // Rate limiting: 10 registrations per IP per hour
+  const ip = request.headers.get("x-forwarded-for") || "unknown_ip";
+  const rateLimit = checkRateLimit(`dcr_${ip}`, 10, 60 * 60 * 1000);
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        error: "slow_down",
+        error_description: "Too many registration attempts. Please try again later.",
+      },
+      { status: 429 },
+    );
+  }
+
+  // Opportunistic cleanup of expired codes
+  pruneExpiredOAuthData().catch(() => {});
+
+  let body: {
+    client_name?: string;
+    redirect_uris?: string[];
+    grant_types?: string[];
+    response_types?: string[];
+    token_endpoint_auth_method?: string;
+  };
   try {
     body = await request.json();
   } catch {

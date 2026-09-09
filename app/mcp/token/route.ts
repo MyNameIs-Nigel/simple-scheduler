@@ -1,11 +1,28 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { mcpEnabled } from "@/lib/env";
-import { exchangeAuthorizationCode, refreshAccessToken } from "@/lib/mcp/oauth";
+import { exchangeAuthorizationCode, pruneExpiredOAuthData, refreshAccessToken } from "@/lib/mcp/oauth";
+import { checkRateLimit } from "@/lib/mcp/hardening";
 
 export async function POST(request: NextRequest) {
   if (!mcpEnabled()) {
     return new NextResponse("Not Found", { status: 404 });
   }
+
+  // Rate limiting: 60 token requests per IP per minute
+  const ip = request.headers.get("x-forwarded-for") || "unknown_ip";
+  const rateLimit = checkRateLimit(`token_${ip}`, 60, 60 * 1000);
+  if (!rateLimit.allowed) {
+    return NextResponse.json(
+      {
+        error: "slow_down",
+        error_description: "Too many token requests. Please try again shortly.",
+      },
+      { status: 429 },
+    );
+  }
+
+  // Opportunistic cleanup of expired codes
+  pruneExpiredOAuthData().catch(() => {});
 
   // Parse body: Claude sends application/x-www-form-urlencoded or JSON
   const contentType = request.headers.get("content-type") || "";
@@ -130,8 +147,8 @@ export async function POST(request: NextRequest) {
         { status: 400 },
       );
     }
-  } catch (error: any) {
-    const msg = error?.message || "Token error";
+  } catch (error: unknown) {
+    const msg = error instanceof Error ? error.message : "Token error";
     // Check if message is a standard OAuth error code
     if (msg.startsWith("invalid_grant")) {
       return NextResponse.json(

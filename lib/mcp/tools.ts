@@ -1,16 +1,14 @@
 import "server-only";
 
-import { and, desc, eq, inArray, like, or } from "drizzle-orm";
+import { and, eq } from "drizzle-orm";
 import { db } from "@/db";
 import {
   calendars,
   eventOverrides,
   events,
   type Calendar,
-  type EventOverride,
-  type EventRow,
 } from "@/db/schema";
-import { expandOccurrences, type Occurrence } from "@/lib/events/expand";
+import { expandOccurrences } from "@/lib/events/expand";
 import {
   saveEventRecord,
   skipOccurrenceRecord,
@@ -28,12 +26,13 @@ import {
   resolveDateRange,
   rruleToNaturalLanguage,
 } from "./format";
+import { nanoid } from "nanoid";
 import { DateTime } from "luxon";
 
 export type McpToolDefinition = {
   name: string;
   description: string;
-  inputSchema: any;
+  inputSchema: Record<string, unknown>;
   readOnlyHint?: boolean;
   destructiveHint?: boolean;
 };
@@ -780,7 +779,6 @@ export async function executeSearchEvents(params: {
 
   const zone = timezone();
   const now = Date.now();
-  const defaultWindow = params.window || (params.from || params.to ? undefined : "60days");
 
   let rangeStart = now - 30 * 24 * 60 * 60 * 1000;
   let rangeEnd = now + 30 * 24 * 60 * 60 * 1000;

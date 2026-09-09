@@ -15,6 +15,7 @@ import {
   MCP_TOOLS,
 } from "@/lib/mcp/tools";
 import { MCP_PROMPTS, renderPrompt } from "@/lib/mcp/prompts";
+import { checkRateLimit, logMcpToolInvocation } from "@/lib/mcp/hardening";
 
 /**
  * Validates Origin header per MCP Streamable HTTP specification.
@@ -103,13 +104,44 @@ export async function POST(request: NextRequest) {
   }
 
   const token = authHeader.substring("Bearer ".length).trim();
-  const verified = await verifyMcpAccessToken(token);
+  let verified = await verifyMcpAccessToken(token);
+
+  // Claude Code / Dev Static Key fallback if enabled and configured
+  if (!verified && process.env.MCP_DEV_STATIC_KEY && token === process.env.MCP_DEV_STATIC_KEY) {
+    verified = {
+      clientId: "dev_static_client",
+      scope: "schedule:read schedule:write",
+      scopes: ["schedule:read", "schedule:write"],
+    };
+  }
+
   if (!verified) {
     return buildMcpUnauthorizedResponse();
   }
 
+  // Rate limiting for MCP tool requests: 120 calls per minute per client
+  const rl = checkRateLimit(`mcp_calls_${verified.clientId}`, 120, 60 * 1000);
+  if (!rl.allowed) {
+    return NextResponse.json(
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32000, message: "Rate limit exceeded. Please slow down." },
+      },
+      { status: 429 },
+    );
+  }
+
   // Parse JSON-RPC MCP request
-  let rpcBody: any;
+  let rpcBody: {
+    jsonrpc?: string;
+    method?: string;
+    params?: {
+      name?: string;
+      arguments?: Record<string, unknown>;
+    };
+    id?: string | number | null;
+  };
   try {
     rpcBody = await request.json();
   } catch {
@@ -165,8 +197,8 @@ export async function POST(request: NextRequest) {
   }
 
   if (method === "prompts/get") {
-    const promptName = params?.name;
-    const promptArgs = params?.arguments ?? {};
+    const promptName = params?.name ?? "";
+    const promptArgs = (params?.arguments ?? {}) as Record<string, string>;
     try {
       const rendered = renderPrompt(promptName, promptArgs);
       return NextResponse.json({
@@ -174,13 +206,14 @@ export async function POST(request: NextRequest) {
         id,
         result: rendered,
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : `Prompt '${promptName}' not found`;
       return NextResponse.json({
         jsonrpc: "2.0",
         id,
         error: {
           code: -32602,
-          message: err?.message || `Prompt '${promptName}' not found`,
+          message: msg,
         },
       });
     }
@@ -188,26 +221,26 @@ export async function POST(request: NextRequest) {
 
   if (method === "tools/call") {
     const toolName = params?.name;
-    const args = params?.arguments ?? {};
+    const args = (params?.arguments ?? {}) as Record<string, unknown>;
 
     try {
       let resultText = "";
       if (toolName === "ping") {
         resultText = "pong";
       } else if (toolName === "list_calendars") {
-        resultText = await executeListCalendars(args);
+        resultText = await executeListCalendars(args as Parameters<typeof executeListCalendars>[0]);
       } else if (toolName === "get_agenda") {
-        resultText = await executeGetAgenda(args);
+        resultText = await executeGetAgenda(args as Parameters<typeof executeGetAgenda>[0]);
       } else if (toolName === "get_event") {
-        resultText = await executeGetEvent(args);
+        resultText = await executeGetEvent(args as Parameters<typeof executeGetEvent>[0]);
       } else if (toolName === "find_free_time") {
-        resultText = await executeFindFreeTime(args);
+        resultText = await executeFindFreeTime(args as Parameters<typeof executeFindFreeTime>[0]);
       } else if (toolName === "search_events") {
-        resultText = await executeSearchEvents(args);
+        resultText = await executeSearchEvents(args as Parameters<typeof executeSearchEvents>[0]);
       } else if (toolName === "summarize_schedule") {
-        resultText = await executeSummarizeSchedule(args);
+        resultText = await executeSummarizeSchedule(args as Parameters<typeof executeSummarizeSchedule>[0]);
       } else if (toolName === "check_conflicts") {
-        resultText = await executeCheckConflicts(args);
+        resultText = await executeCheckConflicts(args as Parameters<typeof executeCheckConflicts>[0]);
       } else if (toolName === "create_event") {
         if (!verified.scopes.includes("schedule:write")) {
           return NextResponse.json({
@@ -224,7 +257,7 @@ export async function POST(request: NextRequest) {
             },
           });
         }
-        resultText = await executeCreateEvent(args);
+        resultText = await executeCreateEvent(args as Parameters<typeof executeCreateEvent>[0]);
       } else if (toolName === "update_event") {
         if (!verified.scopes.includes("schedule:write")) {
           return NextResponse.json({
@@ -241,7 +274,7 @@ export async function POST(request: NextRequest) {
             },
           });
         }
-        resultText = await executeUpdateEvent(args);
+        resultText = await executeUpdateEvent(args as Parameters<typeof executeUpdateEvent>[0]);
       } else if (toolName === "delete_event") {
         if (!verified.scopes.includes("schedule:write")) {
           return NextResponse.json({
@@ -258,8 +291,16 @@ export async function POST(request: NextRequest) {
             },
           });
         }
-        resultText = await executeDeleteEvent(args);
+        resultText = await executeDeleteEvent(args as Parameters<typeof executeDeleteEvent>[0]);
       } else {
+        await logMcpToolInvocation({
+          clientId: verified.clientId,
+          toolName: String(toolName),
+          scope: verified.scope,
+          paramsSummary: JSON.stringify(args),
+          status: "error",
+          errorMessage: `Tool '${toolName}' not found`,
+        });
         return NextResponse.json({
           jsonrpc: "2.0",
           id,
@@ -269,6 +310,14 @@ export async function POST(request: NextRequest) {
           },
         });
       }
+
+      await logMcpToolInvocation({
+        clientId: verified.clientId,
+        toolName: String(toolName),
+        scope: verified.scope,
+        paramsSummary: JSON.stringify(args),
+        status: "ok",
+      });
 
       return NextResponse.json({
         jsonrpc: "2.0",
@@ -282,7 +331,17 @@ export async function POST(request: NextRequest) {
           ],
         },
       });
-    } catch (err: any) {
+    } catch (err: unknown) {
+      const errorMessage = err instanceof Error ? err.message : "Unknown error";
+      await logMcpToolInvocation({
+        clientId: verified.clientId,
+        toolName: String(toolName),
+        scope: verified.scope,
+        paramsSummary: JSON.stringify(args),
+        status: "error",
+        errorMessage,
+      });
+
       return NextResponse.json({
         jsonrpc: "2.0",
         id,
@@ -291,7 +350,7 @@ export async function POST(request: NextRequest) {
           content: [
             {
               type: "text",
-              text: `Error executing tool: ${err?.message || "Unknown error"}`,
+              text: `Error executing tool: ${errorMessage}`,
             },
           ],
         },
@@ -313,7 +372,7 @@ export async function POST(request: NextRequest) {
   });
 }
 
-export async function OPTIONS(request: NextRequest) {
+export async function OPTIONS() {
   if (!mcpEnabled()) {
     return new NextResponse("Not Found", { status: 404 });
   }

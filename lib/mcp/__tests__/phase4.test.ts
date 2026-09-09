@@ -43,7 +43,7 @@ describe("Phase 4 — Server-Side Prompts (daily_agenda, week_ahead, find_time_f
     const res = await mcpPost(req);
     expect(res.status).toBe(200);
     const data = await res.json();
-    const promptNames = data.result.prompts.map((p: any) => p.name);
+    const promptNames = data.result.prompts.map((p: { name: string }) => p.name);
     expect(promptNames).toContain("daily_agenda");
     expect(promptNames).toContain("week_ahead");
     expect(promptNames).toContain("find_time_for");

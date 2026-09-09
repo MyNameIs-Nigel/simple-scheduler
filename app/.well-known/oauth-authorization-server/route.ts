@@ -1,11 +1,11 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { mcpEnabled, siteUrl } from "@/lib/env";
 
 /**
  * OAuth 2.0 Authorization Server Metadata (RFC 8414).
  * Tells clients (Claude) where the authorize, token, registration, and revocation endpoints live.
  */
-export async function GET(request: NextRequest) {
+export async function GET() {
   if (!mcpEnabled()) {
     return new NextResponse("Not Found", { status: 404 });
   }

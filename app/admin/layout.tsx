@@ -16,6 +16,7 @@ export default async function AdminLayout({ children }: LayoutProps<"/admin">) {
     { href: "/admin/events", label: "Events" },
     { href: "/admin/calendars", label: "Calendars" },
     { href: "/admin/feeds", label: "Feeds" },
+    { href: "/admin/mcp", label: "MCP & Grants" },
     { href: "/admin/import", label: "Import" },
   ];
 

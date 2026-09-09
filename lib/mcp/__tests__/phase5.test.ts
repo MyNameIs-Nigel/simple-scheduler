@@ -6,7 +6,6 @@ import { db } from "@/db";
 import { calendars, events } from "@/db/schema";
 import { eq } from "drizzle-orm";
 import { nanoid } from "nanoid";
-import { DateTime } from "luxon";
 
 describe("Phase 5 — Write Tools (create_event, update_event, delete_event)", () => {
   const originalEnv = { ...process.env };

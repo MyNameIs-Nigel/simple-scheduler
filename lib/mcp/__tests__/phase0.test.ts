@@ -27,35 +27,29 @@ describe("Phase 0 — MCP Endpoint & Discovery Metadata", () => {
     const res = await mcpPost(req);
     expect(res.status).toBe(404);
 
-    const prRes = await getProtectedResource(req);
+    const prRes = await getProtectedResource();
     expect(prRes.status).toBe(404);
 
-    const asRes = await getAuthServer(req);
+    const asRes = await getAuthServer();
     expect(asRes.status).toBe(404);
   });
 
   it("serves OAuth protected resource metadata matching connector URL character-for-character", async () => {
-    const req = new NextRequest(
-      "https://schedule.nigel-smith.dev/.well-known/oauth-protected-resource",
-    );
-    const res = await getProtectedResource(req);
+    const res = await getProtectedResource();
     expect(res.status).toBe(200);
 
     const json = await res.json();
     expect(json.resource).toBe("https://schedule.nigel-smith.dev/mcp");
     expect(json.authorization_servers).toEqual(["https://schedule.nigel-smith.dev"]);
 
-    const resMcp = await getProtectedResourceMcp(req);
+    const resMcp = await getProtectedResourceMcp();
     expect(resMcp.status).toBe(200);
     const jsonMcp = await resMcp.json();
     expect(jsonMcp.resource).toBe("https://schedule.nigel-smith.dev/mcp");
   });
 
   it("serves OAuth authorization server metadata with correct endpoints", async () => {
-    const req = new NextRequest(
-      "https://schedule.nigel-smith.dev/.well-known/oauth-authorization-server",
-    );
-    const res = await getAuthServer(req);
+    const res = await getAuthServer();
     expect(res.status).toBe(200);
 
     const json = await res.json();

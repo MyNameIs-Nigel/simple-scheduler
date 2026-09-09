@@ -45,12 +45,30 @@ import { syncCalendarById } from "@/lib/sync/runner";
  * proxy redirect only affects people navigating with a browser.
  */
 
+import { pruneExpiredOAuthData, revokeFamily } from "@/lib/mcp/oauth";
+
 function refresh() {
   revalidatePath("/");
   revalidatePath("/admin");
   revalidatePath("/admin/events");
   revalidatePath("/admin/calendars");
   revalidatePath("/admin/feeds");
+  revalidatePath("/admin/mcp");
+}
+
+export async function revokeMcpFamilyAction(formData: FormData): Promise<void> {
+  await requireAdmin();
+  const familyId = String(formData.get("familyId") ?? "");
+  if (familyId) {
+    await revokeFamily(familyId);
+    revalidatePath("/admin/mcp");
+  }
+}
+
+export async function pruneMcpOAuthAction(): Promise<void> {
+  await requireAdmin();
+  await pruneExpiredOAuthData();
+  revalidatePath("/admin/mcp");
 }
 
 /**

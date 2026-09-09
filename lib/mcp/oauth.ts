@@ -2,7 +2,7 @@ import "server-only";
 
 import { createHash, randomBytes } from "node:crypto";
 import { SignJWT, jwtVerify } from "jose";
-import { and, desc, eq, isNull, lt } from "drizzle-orm";
+import { and, eq, isNotNull, isNull, lt } from "drizzle-orm";
 import { nanoid } from "nanoid";
 
 import { db } from "@/db";
@@ -10,7 +10,6 @@ import {
   mcpAuthorizationCodes,
   mcpClients,
   mcpRefreshTokens,
-  type McpAuthorizationCode,
   type McpClient,
 } from "@/db/schema";
 import {
@@ -382,6 +381,36 @@ export async function revokeFamily(familyId: string): Promise<void> {
     .where(and(eq(mcpRefreshTokens.familyId, familyId), isNull(mcpRefreshTokens.revokedAt)))
     .run();
 }
+
+export async function pruneExpiredOAuthData(): Promise<{
+  prunedCodes: number;
+  prunedTokens: number;
+}> {
+  const now = Date.now();
+  // Delete expired authorization codes
+  const codesRes = await db
+    .delete(mcpAuthorizationCodes)
+    .where(lt(mcpAuthorizationCodes.expiresAt, now))
+    .run();
+
+  // Delete expired and revoked refresh tokens older than 7 days
+  const sevenDaysAgo = now - 7 * 24 * 60 * 60 * 1000;
+  const tokensRes = await db
+    .delete(mcpRefreshTokens)
+    .where(
+      and(
+        lt(mcpRefreshTokens.expiresAt, sevenDaysAgo),
+        isNotNull(mcpRefreshTokens.revokedAt),
+      ),
+    )
+    .run();
+
+  return {
+    prunedCodes: codesRes.changes,
+    prunedTokens: tokensRes.changes,
+  };
+}
+
 
 /**
  * Verifies a Bearer access token.

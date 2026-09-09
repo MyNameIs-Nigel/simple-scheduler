@@ -1,11 +1,11 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse } from "next/server";
 import { mcpEnabled, siteUrl } from "@/lib/env";
 
 /**
  * OAuth 2.0 Protected Resource Metadata (RFC 9704 / draft-ietf-oauth-resource-metadata).
  * Advertises the authorization servers that can issue tokens for this resource.
  */
-export async function GET(request: NextRequest) {
+export async function GET() {
   if (!mcpEnabled()) {
     return new NextResponse("Not Found", { status: 404 });
   }
