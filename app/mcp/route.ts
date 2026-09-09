@@ -1,6 +1,12 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { mcpEnabled, siteUrl } from "@/lib/env";
 import { verifyMcpAccessToken } from "@/lib/mcp/oauth";
+import {
+  executeGetAgenda,
+  executeGetEvent,
+  executeListCalendars,
+  MCP_TOOLS,
+} from "@/lib/mcp/tools";
 
 /**
  * Validates Origin header per MCP Streamable HTTP specification.
@@ -135,24 +141,36 @@ export async function POST(request: NextRequest) {
       jsonrpc: "2.0",
       id,
       result: {
-        tools: [
-          {
-            name: "ping",
-            description: "Test tool to verify authenticated end-to-end MCP connection.",
-            inputSchema: {
-              type: "object",
-              properties: {},
-            },
-            readOnlyHint: true,
-          },
-        ],
+        tools: MCP_TOOLS,
       },
     });
   }
 
   if (method === "tools/call") {
     const toolName = params?.name;
-    if (toolName === "ping") {
+    const args = params?.arguments ?? {};
+
+    try {
+      let resultText = "";
+      if (toolName === "ping") {
+        resultText = "pong";
+      } else if (toolName === "list_calendars") {
+        resultText = await executeListCalendars(args);
+      } else if (toolName === "get_agenda") {
+        resultText = await executeGetAgenda(args);
+      } else if (toolName === "get_event") {
+        resultText = await executeGetEvent(args);
+      } else {
+        return NextResponse.json({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: -32601,
+            message: `Tool '${toolName}' not found or not implemented`,
+          },
+        });
+      }
+
       return NextResponse.json({
         jsonrpc: "2.0",
         id,
@@ -160,21 +178,26 @@ export async function POST(request: NextRequest) {
           content: [
             {
               type: "text",
-              text: "pong",
+              text: resultText,
+            },
+          ],
+        },
+      });
+    } catch (err: any) {
+      return NextResponse.json({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          isError: true,
+          content: [
+            {
+              type: "text",
+              text: `Error executing tool: ${err?.message || "Unknown error"}`,
             },
           ],
         },
       });
     }
-
-    return NextResponse.json({
-      jsonrpc: "2.0",
-      id,
-      error: {
-        code: -32601,
-        message: `Method not found or tool '${toolName}' not implemented yet`,
-      },
-    });
   }
 
   if (method === "notifications/initialized") {
