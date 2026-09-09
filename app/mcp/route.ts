@@ -2,9 +2,13 @@ import { NextResponse, type NextRequest } from "next/server";
 import { mcpEnabled, siteUrl } from "@/lib/env";
 import { verifyMcpAccessToken } from "@/lib/mcp/oauth";
 import {
+  executeCheckConflicts,
+  executeFindFreeTime,
   executeGetAgenda,
   executeGetEvent,
   executeListCalendars,
+  executeSearchEvents,
+  executeSummarizeSchedule,
   MCP_TOOLS,
 } from "@/lib/mcp/tools";
 
@@ -160,6 +164,14 @@ export async function POST(request: NextRequest) {
         resultText = await executeGetAgenda(args);
       } else if (toolName === "get_event") {
         resultText = await executeGetEvent(args);
+      } else if (toolName === "find_free_time") {
+        resultText = await executeFindFreeTime(args);
+      } else if (toolName === "search_events") {
+        resultText = await executeSearchEvents(args);
+      } else if (toolName === "summarize_schedule") {
+        resultText = await executeSummarizeSchedule(args);
+      } else if (toolName === "check_conflicts") {
+        resultText = await executeCheckConflicts(args);
       } else {
         return NextResponse.json({
           jsonrpc: "2.0",
