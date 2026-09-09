@@ -42,6 +42,16 @@ services:
       SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-30}
       # Allow a subscription URL on the LAN. Off by default.
       SYNC_ALLOW_PRIVATE_HOSTS: ${SYNC_ALLOW_PRIVATE_HOSTS:-false}
+      # Remote Model Context Protocol server. These remain optional so existing
+      # deployments keep MCP disabled unless MCP_ENABLED is explicitly true.
+      MCP_ENABLED: ${MCP_ENABLED:-false}
+      MCP_TOKEN_SECRET: ${MCP_TOKEN_SECRET:-}
+      MCP_ACCESS_TOKEN_TTL: ${MCP_ACCESS_TOKEN_TTL:-3600}
+      MCP_REFRESH_TOKEN_TTL: ${MCP_REFRESH_TOKEN_TTL:-2592000}
+      MCP_ALLOWED_REDIRECT_URIS: ${MCP_ALLOWED_REDIRECT_URIS:-}
+      MCP_MAX_RESULTS: ${MCP_MAX_RESULTS:-100}
+      MCP_DEFAULT_WINDOW_DAYS: ${MCP_DEFAULT_WINDOW_DAYS:-7}
+      MCP_DEV_STATIC_KEY: ${MCP_DEV_STATIC_KEY:-}
       # Container clock, so log timestamps read sensibly. Stored instants are
       # UTC regardless of this.
       TZ: ${SCHEDULER_TIMEZONE:-America/New_York}
