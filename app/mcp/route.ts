@@ -11,6 +11,7 @@ import {
   executeSummarizeSchedule,
   MCP_TOOLS,
 } from "@/lib/mcp/tools";
+import { MCP_PROMPTS, renderPrompt } from "@/lib/mcp/prompts";
 
 /**
  * Validates Origin header per MCP Streamable HTTP specification.
@@ -148,6 +149,38 @@ export async function POST(request: NextRequest) {
         tools: MCP_TOOLS,
       },
     });
+  }
+
+  if (method === "prompts/list") {
+    return NextResponse.json({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        prompts: MCP_PROMPTS,
+      },
+    });
+  }
+
+  if (method === "prompts/get") {
+    const promptName = params?.name;
+    const promptArgs = params?.arguments ?? {};
+    try {
+      const rendered = renderPrompt(promptName, promptArgs);
+      return NextResponse.json({
+        jsonrpc: "2.0",
+        id,
+        result: rendered,
+      });
+    } catch (err: any) {
+      return NextResponse.json({
+        jsonrpc: "2.0",
+        id,
+        error: {
+          code: -32602,
+          message: err?.message || `Prompt '${promptName}' not found`,
+        },
+      });
+    }
   }
 
   if (method === "tools/call") {
