@@ -12,11 +12,15 @@ import {
 } from "@/db/schema";
 import { expandOccurrences, type Occurrence } from "@/lib/events/expand";
 import {
+  saveEventRecord,
+  skipOccurrenceRecord,
+} from "@/db/mutations";
+import {
   listCalendars,
   listEventsInRange,
   listOverridesFor,
 } from "@/lib/events/queries";
-import { mcpDefaultWindowDays, mcpMaxResults, timezone } from "@/lib/env";
+import { mcpDefaultWindowDays, mcpMaxResults, siteUrl, timezone } from "@/lib/env";
 import {
   decodeOccurrenceId,
   encodeOccurrenceId,
@@ -244,6 +248,109 @@ export const MCP_TOOLS: McpToolDefinition[] = [
       required: ["start", "end"],
     },
     readOnlyHint: true,
+  },
+  {
+    name: "create_event",
+    description:
+      "Creates a new event on a calendar. Requires schedule:write scope. Refuses mirrored subscription calendars with clear reason. Emits confirmation with short ID.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        calendar: {
+          type: "string",
+          description: "Calendar slug to create the event in (e.g. 'work' or 'personal').",
+        },
+        summary: {
+          type: "string",
+          description: "Title/summary of the event.",
+        },
+        start: {
+          type: "string",
+          description: "ISO start time or YYYY-MM-DD for all-day events.",
+        },
+        end: {
+          type: "string",
+          description: "ISO end time or YYYY-MM-DD for all-day events.",
+        },
+        allDay: {
+          type: "boolean",
+          description: "Whether this is an all-day event. Defaults to false.",
+        },
+        description: {
+          type: "string",
+          description: "Optional detailed notes.",
+        },
+        location: {
+          type: "string",
+          description: "Optional physical or virtual location.",
+        },
+      },
+      required: ["calendar", "summary", "start", "end"],
+    },
+    readOnlyHint: false,
+  },
+  {
+    name: "update_event",
+    description:
+      "Updates an existing event or occurrence. Requires schedule:write scope. If the event is recurring, caller MUST explicitly specify scope ('this_occurrence' or 'entire_series') — server will never infer.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "Event ID or occurrence ID (#id).",
+        },
+        scope: {
+          type: "string",
+          enum: ["this_occurrence", "entire_series"],
+          description: "Mandatory for recurring events: 'this_occurrence' modifies only this instance; 'entire_series' modifies all instances.",
+        },
+        summary: {
+          type: "string",
+          description: "New summary.",
+        },
+        start: {
+          type: "string",
+          description: "New ISO start time.",
+        },
+        end: {
+          type: "string",
+          description: "New ISO end time.",
+        },
+        description: {
+          type: "string",
+          description: "New description.",
+        },
+        location: {
+          type: "string",
+          description: "New location.",
+        },
+      },
+      required: ["id"],
+    },
+    readOnlyHint: false,
+  },
+  {
+    name: "delete_event",
+    description:
+      "Deletes an event or occurrence. Destructive operation. Requires schedule:write scope. For recurring events, caller MUST explicitly specify scope ('this_occurrence' or 'entire_series'). Refuses mirrored calendars.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        id: {
+          type: "string",
+          description: "Event ID or occurrence ID (#id).",
+        },
+        scope: {
+          type: "string",
+          enum: ["this_occurrence", "entire_series"],
+          description: "Mandatory for recurring events: 'this_occurrence' skips this instance; 'entire_series' deletes the entire series.",
+        },
+      },
+      required: ["id"],
+    },
+    readOnlyHint: false,
+    destructiveHint: true,
   },
 ];
 
@@ -939,4 +1046,260 @@ export async function executeCheckConflicts(params: {
 
   return lines.join("\n");
 }
+
+/**
+ * Handles `create_event`
+ */
+export async function executeCreateEvent(params: {
+  calendar: string;
+  summary: string;
+  start: string;
+  end: string;
+  allDay?: boolean;
+  description?: string;
+  location?: string;
+}): Promise<string> {
+  const zone = timezone();
+  const allCals = await listCalendars({ publicOnly: false });
+  const targetCal = allCals.find(
+    (c) => c.slug.toLowerCase() === (params.calendar ?? "").toLowerCase(),
+  );
+
+  if (!targetCal) {
+    const available = allCals.map((c) => c.slug).join(", ");
+    return `Error: Calendar '${params.calendar}' not found. Available calendars: ${available}`;
+  }
+
+  if (targetCal.sourceUrl) {
+    return `Error: Calendar '${targetCal.name}' (${targetCal.slug}) mirrors an external subscription URL and is read-only. Events must be modified at the upstream source.`;
+  }
+
+  const allDay = params.allDay === true;
+  let startMs: number;
+  let endMs: number;
+
+  if (allDay) {
+    const sDt = DateTime.fromISO(params.start, { zone }).startOf("day");
+    const eDt = DateTime.fromISO(params.end, { zone }).startOf("day");
+    if (!sDt.isValid || !eDt.isValid) {
+      return "Error: Invalid ISO start or end date for all-day event (expected format YYYY-MM-DD).";
+    }
+    startMs = sDt.toMillis();
+    // Inclusive end day adds 24h
+    endMs = eDt.plus({ days: 1 }).toMillis();
+  } else {
+    const sDt = DateTime.fromISO(params.start, { zone });
+    const eDt = DateTime.fromISO(params.end, { zone });
+    if (!sDt.isValid || !eDt.isValid) {
+      return "Error: Invalid ISO start or end timestamp (expected ISO format e.g. 2026-09-09T14:00:00).";
+    }
+    startMs = sDt.toMillis();
+    endMs = eDt.toMillis();
+  }
+
+  if (endMs <= startMs) {
+    return "Error: End time must be after start time.";
+  }
+
+  const host = new URL(siteUrl()).host;
+  const result = saveEventRecord(
+    db,
+    {
+      calendarId: targetCal.id,
+      summary: params.summary,
+      description: params.description ?? null,
+      location: params.location ?? null,
+      allDay,
+      dtstart: startMs,
+      dtend: endMs,
+      rrule: null,
+      status: "CONFIRMED",
+    },
+    { host },
+  );
+
+  if (!result.ok) {
+    return "Error saving event.";
+  }
+
+  const startFormatted = DateTime.fromMillis(startMs, { zone }).toFormat("yyyy-LL-dd HH:mm");
+  const endFormatted = DateTime.fromMillis(endMs, { zone }).toFormat("HH:mm");
+  return `Created event '${params.summary}' (#${result.id}) on [${targetCal.name}]\nTime: ${startFormatted}–${endFormatted} (${zone})`;
+}
+
+/**
+ * Handles `update_event`
+ */
+export async function executeUpdateEvent(params: {
+  id: string;
+  scope?: "this_occurrence" | "entire_series";
+  summary?: string;
+  start?: string;
+  end?: string;
+  description?: string;
+  location?: string;
+}): Promise<string> {
+  const { id } = params;
+  if (!id) return "Error: id parameter is required.";
+
+  const cleanId = id.startsWith("#") ? id.slice(1) : id;
+  const { eventId, recurrenceId } = decodeOccurrenceId(cleanId);
+
+  const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
+  if (!event) return `Error: Event '${eventId}' not found.`;
+
+  const [cal] = await db.select().from(calendars).where(eq(calendars.id, event.calendarId)).limit(1);
+  if (cal?.sourceUrl) {
+    return `Error: Calendar '${cal.name}' mirrors an external subscription and is read-only. Edit events at the upstream source.`;
+  }
+
+  const zone = timezone();
+
+  if (event.rrule) {
+    if (!params.scope) {
+      return (
+        "Error: Event is recurring. You must explicitly specify scope: either 'this_occurrence' to edit only this instance, or 'entire_series' to modify the whole series."
+      );
+    }
+
+    if (params.scope === "this_occurrence") {
+      if (!recurrenceId) {
+        return "Error: To edit a single occurrence, specify the occurrence ID (e.g. #evt_123_r1757433600000) or provide a valid recurrence slot.";
+      }
+
+      // Per-occurrence override
+      const duration = Math.max(0, event.dtend - event.dtstart);
+      let newStartMs = recurrenceId;
+      let newEndMs = recurrenceId + duration;
+
+      if (params.start) {
+        const sDt = DateTime.fromISO(params.start, { zone });
+        if (sDt.isValid) newStartMs = sDt.toMillis();
+      }
+      if (params.end) {
+        const eDt = DateTime.fromISO(params.end, { zone });
+        if (eDt.isValid) newEndMs = eDt.toMillis();
+      }
+
+      // Check if override already exists
+      const [existingOverride] = await db
+        .select()
+        .from(eventOverrides)
+        .where(
+          and(
+            eq(eventOverrides.eventId, eventId),
+            eq(eventOverrides.recurrenceId, recurrenceId),
+          ),
+        )
+        .limit(1);
+
+      const overrideValues = {
+        summary: params.summary ?? existingOverride?.summary ?? event.summary,
+        description: params.description !== undefined ? params.description : (existingOverride?.description ?? event.description),
+        location: params.location !== undefined ? params.location : (existingOverride?.location ?? event.location),
+        dtstart: newStartMs,
+        dtend: newEndMs,
+        updatedAt: Date.now(),
+      };
+
+      if (existingOverride) {
+        await db
+          .update(eventOverrides)
+          .set(overrideValues)
+          .where(eq(eventOverrides.id, existingOverride.id))
+          .run();
+      } else {
+        await db
+          .insert(eventOverrides)
+          .values({
+            id: `ovr_${nanoid(12)}`,
+            eventId,
+            recurrenceId,
+            ...overrideValues,
+            cancelled: false,
+            createdAt: Date.now(),
+          })
+          .run();
+      }
+
+      return `Updated single occurrence (#${cleanId}) of recurring series '${event.summary}'.`;
+    }
+  }
+
+  // Update entire series or one-off event
+  let dtstart = event.dtstart;
+  let dtend = event.dtend;
+
+  if (params.start) {
+    const sDt = DateTime.fromISO(params.start, { zone });
+    if (sDt.isValid) dtstart = sDt.toMillis();
+  }
+  if (params.end) {
+    const eDt = DateTime.fromISO(params.end, { zone });
+    if (eDt.isValid) dtend = eDt.toMillis();
+  }
+
+  const host = new URL(siteUrl()).host;
+  saveEventRecord(
+    db,
+    {
+      id: event.id,
+      calendarId: event.calendarId,
+      summary: params.summary ?? event.summary,
+      description: params.description !== undefined ? params.description : event.description,
+      location: params.location !== undefined ? params.location : event.location,
+      allDay: event.allDay,
+      dtstart,
+      dtend,
+      rrule: event.rrule,
+      status: event.status,
+    },
+    { host },
+  );
+
+  return `Updated event '${params.summary ?? event.summary}' (#${event.id}).`;
+}
+
+/**
+ * Handles `delete_event`
+ */
+export async function executeDeleteEvent(params: {
+  id: string;
+  scope?: "this_occurrence" | "entire_series";
+}): Promise<string> {
+  const { id } = params;
+  if (!id) return "Error: id parameter is required.";
+
+  const cleanId = id.startsWith("#") ? id.slice(1) : id;
+  const { eventId, recurrenceId } = decodeOccurrenceId(cleanId);
+
+  const [event] = await db.select().from(events).where(eq(events.id, eventId)).limit(1);
+  if (!event) return `Error: Event '${eventId}' not found.`;
+
+  const [cal] = await db.select().from(calendars).where(eq(calendars.id, event.calendarId)).limit(1);
+  if (cal?.sourceUrl) {
+    return `Error: Calendar '${cal.name}' mirrors an external subscription and is read-only. Events must be deleted at the source.`;
+  }
+
+  if (event.rrule) {
+    if (!params.scope) {
+      return (
+        "Error: Event is recurring. You must explicitly specify scope: either 'this_occurrence' to skip this occurrence, or 'entire_series' to permanently delete all occurrences."
+      );
+    }
+
+    if (params.scope === "this_occurrence") {
+      if (!recurrenceId) {
+        return "Error: Occurrence ID (#evt_id_r...) is required to delete a single occurrence.";
+      }
+      skipOccurrenceRecord(db, eventId, recurrenceId);
+      return `Deleted occurrence slot ${recurrenceId} of recurring event '${event.summary}'.`;
+    }
+  }
+
+  // Delete entire event / series
+  await db.delete(events).where(eq(events.id, eventId)).run();
+  return `Permanently deleted event '${event.summary}' (#${eventId}).`;
+}
+
 

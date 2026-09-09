@@ -53,12 +53,12 @@ export function rruleToNaturalLanguage(rrule: string | null, zone: string): stri
  */
 export function encodeOccurrenceId(eventId: string, recurrenceId: number | null): string {
   if (!recurrenceId) return eventId;
-  return `${eventId}_r${recurrenceId}`;
+  return `${eventId}__rec_${recurrenceId}`;
 }
 
 export function decodeOccurrenceId(id: string): { eventId: string; recurrenceId: number | null } {
-  if (id.includes("_r")) {
-    const [eventId, recStr] = id.split("_r");
+  if (id.includes("__rec_")) {
+    const [eventId, recStr] = id.split("__rec_");
     const recId = Number(recStr);
     return {
       eventId,

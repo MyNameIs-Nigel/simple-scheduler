@@ -3,12 +3,15 @@ import { mcpEnabled, siteUrl } from "@/lib/env";
 import { verifyMcpAccessToken } from "@/lib/mcp/oauth";
 import {
   executeCheckConflicts,
+  executeCreateEvent,
+  executeDeleteEvent,
   executeFindFreeTime,
   executeGetAgenda,
   executeGetEvent,
   executeListCalendars,
   executeSearchEvents,
   executeSummarizeSchedule,
+  executeUpdateEvent,
   MCP_TOOLS,
 } from "@/lib/mcp/tools";
 import { MCP_PROMPTS, renderPrompt } from "@/lib/mcp/prompts";
@@ -205,6 +208,57 @@ export async function POST(request: NextRequest) {
         resultText = await executeSummarizeSchedule(args);
       } else if (toolName === "check_conflicts") {
         resultText = await executeCheckConflicts(args);
+      } else if (toolName === "create_event") {
+        if (!verified.scopes.includes("schedule:write")) {
+          return NextResponse.json({
+            jsonrpc: "2.0",
+            id,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: "Error: schedule:write scope required to create events. Re-authorize connection with write access.",
+                },
+              ],
+            },
+          });
+        }
+        resultText = await executeCreateEvent(args);
+      } else if (toolName === "update_event") {
+        if (!verified.scopes.includes("schedule:write")) {
+          return NextResponse.json({
+            jsonrpc: "2.0",
+            id,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: "Error: schedule:write scope required to update events. Re-authorize connection with write access.",
+                },
+              ],
+            },
+          });
+        }
+        resultText = await executeUpdateEvent(args);
+      } else if (toolName === "delete_event") {
+        if (!verified.scopes.includes("schedule:write")) {
+          return NextResponse.json({
+            jsonrpc: "2.0",
+            id,
+            result: {
+              isError: true,
+              content: [
+                {
+                  type: "text",
+                  text: "Error: schedule:write scope required to delete events. Re-authorize connection with write access.",
+                },
+              ],
+            },
+          });
+        }
+        resultText = await executeDeleteEvent(args);
       } else {
         return NextResponse.json({
           jsonrpc: "2.0",
