@@ -28,6 +28,29 @@ const serverSchema = z.object({
     .default("true")
     .transform((v) => v === "true"),
   SYNC_INTERVAL_MINUTES: z.coerce.number().int().min(5).max(1440).default(30),
+
+  // MCP Configuration
+  MCP_ENABLED: z
+    .enum(["true", "false"])
+    .default("false")
+    .transform((v) => v === "true"),
+  MCP_TOKEN_SECRET: z.string().optional(),
+  MCP_ACCESS_TOKEN_TTL: z.coerce.number().int().min(60).default(3600), // 1 hour in seconds
+  MCP_REFRESH_TOKEN_TTL: z.coerce.number().int().min(3600).default(30 * 24 * 3600), // 30 days in seconds
+  MCP_ALLOWED_REDIRECT_URIS: z.string().optional(),
+  MCP_MAX_RESULTS: z.coerce.number().int().min(1).max(500).default(100),
+  MCP_DEFAULT_WINDOW_DAYS: z.coerce.number().int().min(1).max(90).default(7),
+  MCP_DEV_STATIC_KEY: z.string().optional(),
+}).superRefine((data, ctx) => {
+  if (data.MCP_ENABLED) {
+    if (!data.MCP_TOKEN_SECRET || data.MCP_TOKEN_SECRET.length < 32) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["MCP_TOKEN_SECRET"],
+        message: "MCP_TOKEN_SECRET must be at least 32 characters when MCP_ENABLED is true",
+      });
+    }
+  }
 });
 
 export type ServerEnv = z.infer<typeof serverSchema>;
@@ -76,3 +99,48 @@ export function syncIntervalMs(): number {
 export function syncEnabled(): boolean {
   return (process.env.SYNC_ENABLED ?? "true") !== "false";
 }
+
+export function mcpEnabled(): boolean {
+  return (process.env.MCP_ENABLED ?? "false") === "true";
+}
+
+export function mcpTokenSecret(): string {
+  const secret = process.env.MCP_TOKEN_SECRET;
+  if (!secret || secret.length < 32) {
+    throw new Error("MCP_TOKEN_SECRET must be at least 32 characters");
+  }
+  return secret;
+}
+
+export function mcpAccessTokenTtl(): number {
+  const raw = Number(process.env.MCP_ACCESS_TOKEN_TTL);
+  return Number.isFinite(raw) && raw >= 60 ? raw : 3600;
+}
+
+export function mcpRefreshTokenTtl(): number {
+  const raw = Number(process.env.MCP_REFRESH_TOKEN_TTL);
+  return Number.isFinite(raw) && raw >= 3600 ? raw : 30 * 24 * 3600;
+}
+
+export function mcpMaxResults(): number {
+  const raw = Number(process.env.MCP_MAX_RESULTS);
+  return Number.isFinite(raw) && raw >= 1 && raw <= 500 ? raw : 100;
+}
+
+export function mcpDefaultWindowDays(): number {
+  const raw = Number(process.env.MCP_DEFAULT_WINDOW_DAYS);
+  return Number.isFinite(raw) && raw >= 1 && raw <= 90 ? raw : 7;
+}
+
+export function mcpAllowedRedirectUris(): string[] {
+  const raw = process.env.MCP_ALLOWED_REDIRECT_URIS;
+  if (raw && raw.trim().length > 0) {
+    return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  // Default Anthropic documented callbacks + localhost
+  return [
+    "https://claude.ai/api/mcp/auth_callback",
+    "https://claude.com/api/mcp/auth_callback",
+  ];
+}
+
