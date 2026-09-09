@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { mcpEnabled, siteUrl } from "@/lib/env";
+import { verifyMcpAccessToken } from "@/lib/mcp/oauth";
 
 /**
  * Validates Origin header per MCP Streamable HTTP specification.
@@ -87,8 +88,107 @@ export async function POST(request: NextRequest) {
     return buildMcpUnauthorizedResponse();
   }
 
-  // In Phase 0, no tokens are valid yet: returns 401
-  return buildMcpUnauthorizedResponse();
+  const token = authHeader.substring("Bearer ".length).trim();
+  const verified = await verifyMcpAccessToken(token);
+  if (!verified) {
+    return buildMcpUnauthorizedResponse();
+  }
+
+  // Parse JSON-RPC MCP request
+  let rpcBody: any;
+  try {
+    rpcBody = await request.json();
+  } catch {
+    return NextResponse.json(
+      {
+        jsonrpc: "2.0",
+        id: null,
+        error: { code: -32700, message: "Parse error" },
+      },
+      { status: 400 },
+    );
+  }
+
+  const { method, params, id } = rpcBody;
+
+  // Handle standard MCP methods
+  if (method === "initialize") {
+    return NextResponse.json({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        protocolVersion: "2024-11-05",
+        capabilities: {
+          tools: {},
+          prompts: {},
+        },
+        serverInfo: {
+          name: "simple-scheduler",
+          version: "1.0.0",
+        },
+      },
+    });
+  }
+
+  if (method === "tools/list") {
+    return NextResponse.json({
+      jsonrpc: "2.0",
+      id,
+      result: {
+        tools: [
+          {
+            name: "ping",
+            description: "Test tool to verify authenticated end-to-end MCP connection.",
+            inputSchema: {
+              type: "object",
+              properties: {},
+            },
+            readOnlyHint: true,
+          },
+        ],
+      },
+    });
+  }
+
+  if (method === "tools/call") {
+    const toolName = params?.name;
+    if (toolName === "ping") {
+      return NextResponse.json({
+        jsonrpc: "2.0",
+        id,
+        result: {
+          content: [
+            {
+              type: "text",
+              text: "pong",
+            },
+          ],
+        },
+      });
+    }
+
+    return NextResponse.json({
+      jsonrpc: "2.0",
+      id,
+      error: {
+        code: -32601,
+        message: `Method not found or tool '${toolName}' not implemented yet`,
+      },
+    });
+  }
+
+  if (method === "notifications/initialized") {
+    return new NextResponse(null, { status: 204 });
+  }
+
+  return NextResponse.json({
+    jsonrpc: "2.0",
+    id,
+    error: {
+      code: -32601,
+      message: `Unknown method '${method}'`,
+    },
+  });
 }
 
 export async function OPTIONS(request: NextRequest) {

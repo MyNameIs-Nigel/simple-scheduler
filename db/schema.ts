@@ -200,3 +200,92 @@ export type EventOverride = typeof eventOverrides.$inferSelect;
 export type NewEventOverride = typeof eventOverrides.$inferInsert;
 export type PublishedFeed = typeof publishedFeeds.$inferSelect;
 export type NewPublishedFeed = typeof publishedFeeds.$inferInsert;
+
+/* ---- MCP OAuth 2.1 Tables ---------------------------------------------- */
+
+export const mcpClients = sqliteTable(
+  "mcp_clients",
+  {
+    id: text("id").primaryKey(), // client_id
+    clientSecret: text("client_secret"),
+    clientName: text("client_name"),
+    redirectUris: text("redirect_uris", { mode: "json" }).$type<string[]>().notNull(),
+    grantTypes: text("grant_types", { mode: "json" }).$type<string[]>(),
+    responseTypes: text("response_types", { mode: "json" }).$type<string[]>(),
+    tokenEndpointAuthMethod: text("token_endpoint_auth_method").default("none"),
+    createdAt: integer("created_at").notNull().default(now),
+    updatedAt: integer("updated_at").notNull().default(now),
+  },
+  (t) => [index("mcp_clients_created_idx").on(t.createdAt)],
+);
+
+export const mcpAuthorizationCodes = sqliteTable(
+  "mcp_authorization_codes",
+  {
+    code: text("code").primaryKey(),
+    clientId: text("client_id")
+      .notNull()
+      .references(() => mcpClients.id, { onDelete: "cascade" }),
+    redirectUri: text("redirect_uri").notNull(),
+    codeChallenge: text("code_challenge").notNull(),
+    codeChallengeMethod: text("code_challenge_method").notNull().default("S256"),
+    scope: text("scope").notNull().default("schedule:read"),
+    expiresAt: integer("expires_at").notNull(),
+    usedAt: integer("used_at"),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [
+    index("mcp_auth_codes_client_idx").on(t.clientId),
+    index("mcp_auth_codes_expires_idx").on(t.expiresAt),
+  ],
+);
+
+export const mcpRefreshTokens = sqliteTable(
+  "mcp_refresh_tokens",
+  {
+    id: text("id").primaryKey(), // token identifier or random uuid
+    tokenHash: text("token_hash").notNull(), // sha256 hash of refresh token
+    clientId: text("client_id")
+      .notNull()
+      .references(() => mcpClients.id, { onDelete: "cascade" }),
+    familyId: text("family_id").notNull(), // for token family rotation & revocation
+    scope: text("scope").notNull().default("schedule:read"),
+    expiresAt: integer("expires_at").notNull(),
+    revokedAt: integer("revoked_at"),
+    lastUsedAt: integer("last_used_at"),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [
+    uniqueIndex("mcp_refresh_tokens_hash_idx").on(t.tokenHash),
+    index("mcp_refresh_tokens_family_idx").on(t.familyId),
+    index("mcp_refresh_tokens_client_idx").on(t.clientId),
+  ],
+);
+
+export const mcpAuditLogs = sqliteTable(
+  "mcp_audit_logs",
+  {
+    id: text("id").primaryKey(),
+    clientId: text("client_id"),
+    toolName: text("tool_name").notNull(),
+    scope: text("scope"),
+    paramsSummary: text("params_summary"),
+    status: text("status", { enum: ["ok", "error"] }).notNull(),
+    errorMessage: text("error_message"),
+    createdAt: integer("created_at").notNull().default(now),
+  },
+  (t) => [
+    index("mcp_audit_logs_client_idx").on(t.clientId),
+    index("mcp_audit_logs_created_idx").on(t.createdAt),
+  ],
+);
+
+export type McpClient = typeof mcpClients.$inferSelect;
+export type NewMcpClient = typeof mcpClients.$inferInsert;
+export type McpAuthorizationCode = typeof mcpAuthorizationCodes.$inferSelect;
+export type NewMcpAuthorizationCode = typeof mcpAuthorizationCodes.$inferInsert;
+export type McpRefreshToken = typeof mcpRefreshTokens.$inferSelect;
+export type NewMcpRefreshToken = typeof mcpRefreshTokens.$inferInsert;
+export type McpAuditLog = typeof mcpAuditLogs.$inferSelect;
+export type NewMcpAuditLog = typeof mcpAuditLogs.$inferInsert;
+
