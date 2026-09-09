@@ -17,6 +17,14 @@ that can drift out of sync with what you edited.
 Built with Next.js 16, React 19, Tailwind v4, Drizzle and better-sqlite3.
 Theme shared with [nigel-smith.dev](https://nigel-smith.dev).
 
+Documentation is available in the [`docs/`](./docs/README.md) directory, covering:
+- [System Architecture](./docs/architecture.md)
+- [Configuration Reference](./docs/configuration.md)
+- [Local Development & Testing](./docs/development.md)
+- [Deployment & Operations](./docs/deployment.md)
+- [Features & Capabilities](./docs/features.md)
+- [Remote MCP Server Design Notes](./docs/mcp/README.md)
+
 ---
 
 ## Configuration
