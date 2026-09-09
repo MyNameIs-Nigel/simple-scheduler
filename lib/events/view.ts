@@ -3,15 +3,16 @@ import { DateTime } from "luxon";
 /**
  * URL <-> date-window mapping for the public calendar.
  *
- * The URL is the only state: `?view=month&date=2026-08-26`. That keeps the page
+ * The URL is the only state: `?view=week&date=2026-08-26`. That keeps the page
  * a server component, makes every view shareable, and means the back button
  * behaves. Nothing here touches the database.
  */
 
 export type CalendarView = "month" | "week" | "agenda";
 
+/** Week is the default: the landing page should answer "what's on this week". */
 export function parseView(value: string | undefined): CalendarView {
-  return value === "week" || value === "agenda" ? value : "month";
+  return value === "month" || value === "agenda" ? value : "week";
 }
 
 /** Falls back to today when the date is absent or unparseable. */

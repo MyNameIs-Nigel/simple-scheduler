@@ -77,12 +77,20 @@ export const eventSchema = z
 
 export type EventInput = z.infer<typeof eventSchema>;
 
-/** Shape returned by every action, consumed by useActionState. */
-export type ActionState = {
+/**
+ * Shape returned by every action, consumed by useActionState.
+ *
+ * `values` is what makes a rejected save survivable: React resets a form once
+ * its action settles, so a failure that does not carry the submission back
+ * wipes every field. See lib/events/form.ts for the full story.
+ */
+export type ActionState<TValues = never> = {
   ok: boolean;
   message?: string;
   /** Dotted field path -> first error message. */
   errors?: Record<string, string>;
+  /** The submission, echoed back so the form can re-render it as its defaults. */
+  values?: TValues;
 };
 
 export function zodErrors(error: z.ZodError): Record<string, string> {

@@ -18,6 +18,14 @@ import { requireAdmin } from "@/lib/auth/dal";
 import { siteUrl, timezone } from "@/lib/env";
 import { buildRRule } from "@/lib/events/rrule";
 import {
+  readCalendarForm,
+  readEventForm,
+  readFeedForm,
+  type CalendarFormValues,
+  type EventFormValues,
+  type FeedFormValues,
+} from "@/lib/events/form";
+import {
   calendarSchema,
   eventSchema,
   feedSchema,
@@ -78,41 +86,72 @@ function fail(message: string, errors?: Record<string, string>): ActionState {
   return { ok: false, message, errors };
 }
 
+/**
+ * Builds the `fail` for one submission, with that submission attached.
+ *
+ * Every rejection from a form-backed action has to carry `values`: React resets
+ * the form as soon as the action settles, so a bare error message would take
+ * the user's work with it. Binding them once here is what stops a new failure
+ * path from quietly forgetting to.
+ */
+function rejector<TValues>(values: TValues) {
+  return (message: string, errors?: Record<string, string>): ActionState<TValues> => ({
+    ok: false,
+    message,
+    errors,
+    values,
+  });
+}
+
+/** Shown when something below the form throws — a locked database, say. */
+const UNEXPECTED =
+  "Something went wrong saving that. Nothing was changed, and your entries are still here — try again.";
+
 /* -------------------------------------------------------------------------- */
 /* Calendars                                                                  */
 /* -------------------------------------------------------------------------- */
 
 export async function saveCalendar(
-  _prev: ActionState,
+  _prev: ActionState<CalendarFormValues>,
   formData: FormData,
-): Promise<ActionState> {
+): Promise<ActionState<CalendarFormValues>> {
   await requireAdmin();
 
-  const id = String(formData.get("id") ?? "").trim();
-  const parsed = calendarSchema.safeParse({
-    name: formData.get("name"),
-    slug: formData.get("slug"),
-    description: formData.get("description") ?? "",
-    accent: formData.get("accent") ?? 1,
-    isPublic: formData.get("isPublic") === "on" || formData.get("isPublic") === "true",
-    sourceUrl: formData.get("sourceUrl") ?? "",
-  });
-
-  if (!parsed.success) return fail("Please fix the highlighted fields.", zodErrors(parsed.error));
-
-  const sourceUrl = parsed.data.sourceUrl?.trim() || null;
-  if (sourceUrl) {
-    // Same check the fetcher applies, run here so a bad URL is rejected at the
-    // form rather than surfacing 30 minutes later as a sync error.
-    const validated = validateSourceUrl(sourceUrl);
-    if (!validated.ok) return fail(validated.message, { sourceUrl: validated.message });
-  }
-
-  const result = saveCalendarRecord(db, { id: id || undefined, ...parsed.data, sourceUrl });
-  if (!result.ok) return fail("That slug is already in use.", { slug: "Already in use" });
+  const outcome = await writeCalendar(readCalendarForm(formData));
+  if (!outcome.ok) return outcome;
 
   refresh();
   redirect("/admin/calendars");
+}
+
+/** As `writeEvent`: the redirect stays outside so this can be wrapped whole. */
+async function writeCalendar(
+  values: CalendarFormValues,
+): Promise<ActionState<CalendarFormValues>> {
+  const reject = rejector(values);
+
+  try {
+    const parsed = calendarSchema.safeParse(values);
+    if (!parsed.success) {
+      return reject("Please fix the highlighted fields.", zodErrors(parsed.error));
+    }
+
+    const sourceUrl = parsed.data.sourceUrl?.trim() || null;
+    if (sourceUrl) {
+      // Same check the fetcher applies, run here so a bad URL is rejected at the
+      // form rather than surfacing 30 minutes later as a sync error.
+      const validated = validateSourceUrl(sourceUrl);
+      if (!validated.ok) return reject(validated.message, { sourceUrl: validated.message });
+    }
+
+    const result = saveCalendarRecord(db, { id: values.id, ...parsed.data, sourceUrl });
+    if (!result.ok) return reject("That slug is already in use.", { slug: "Already in use" });
+
+    return { ok: true };
+  } catch (error) {
+    console.error("[admin] saving a calendar failed:", error);
+    return reject(UNEXPECTED);
+  }
 }
 
 export async function deleteCalendar(formData: FormData): Promise<void> {
@@ -130,97 +169,91 @@ export async function deleteCalendar(formData: FormData): Promise<void> {
 /* Events                                                                     */
 /* -------------------------------------------------------------------------- */
 
-export async function saveEvent(_prev: ActionState, formData: FormData): Promise<ActionState> {
+export async function saveEvent(
+  _prev: ActionState<EventFormValues>,
+  formData: FormData,
+): Promise<ActionState<EventFormValues>> {
   await requireAdmin();
 
-  const zone = timezone();
-  const id = String(formData.get("id") ?? "").trim();
-
-  // Both the target calendar and, on an edit, the one the event currently sits
-  // on: neither may be a mirror, or the save would be moving an event into or
-  // out of rows the sync owns.
-  const targetCalendarId = String(formData.get("calendarId") ?? "");
-  if (targetCalendarId && (await isMirrored(targetCalendarId))) return fail(MIRROR_REFUSAL);
-  if (id) {
-    const current = await calendarIdOfEvent(id);
-    if (current && (await isMirrored(current))) return fail(MIRROR_REFUSAL);
-  }
-  const allDay = formData.get("allDay") === "on" || formData.get("allDay") === "true";
-
-  const parsed = eventSchema.safeParse({
-    calendarId: formData.get("calendarId"),
-    summary: formData.get("summary"),
-    description: formData.get("description") ?? "",
-    location: formData.get("location") ?? "",
-    url: formData.get("url") ?? "",
-    allDay,
-    start: formData.get("start"),
-    end: formData.get("end"),
-    status: formData.get("status") ?? "CONFIRMED",
-    recurrence: {
-      freq: formData.get("freq") ?? "none",
-      interval: formData.get("interval") ?? 1,
-      byWeekday: formData.getAll("byWeekday").map(String),
-      endMode: formData.get("endMode") ?? "never",
-      count: formData.get("count") || undefined,
-      until: formData.get("until") || undefined,
-    },
-  });
-
-  if (!parsed.success) return fail("Please fix the highlighted fields.", zodErrors(parsed.error));
-  const input = parsed.data;
-
-  const dtstart = allDay
-    ? fromDateInput(input.start, zone)
-    : fromLocalInput(input.start, zone);
-  let dtend = allDay ? fromDateInput(input.end, zone) : fromLocalInput(input.end, zone);
-
-  if (dtstart === null || dtend === null) {
-    return fail("Could not read those dates.", { start: "Invalid date" });
-  }
-
-  // DTEND is exclusive in RFC 5545, so a one-day all-day event ends the next
-  // day. The form asks for the last day inclusive, which is what a person means.
-  if (allDay) dtend += 24 * 60 * 60 * 1000;
-
-  if (dtend <= dtstart) {
-    return fail("The end must come after the start.", { end: "Must be after the start" });
-  }
-
-  const rrule = buildRRule(
-    {
-      freq: input.recurrence.freq,
-      interval: input.recurrence.interval,
-      byWeekday: input.recurrence.byWeekday,
-      endMode: input.recurrence.endMode,
-      count: input.recurrence.count,
-      until: input.recurrence.until,
-    },
-    zone,
-  );
-
-  const result = saveEventRecord(
-    db,
-    {
-      id: id || undefined,
-      calendarId: input.calendarId,
-      summary: input.summary,
-      description: input.description,
-      location: input.location,
-      url: input.url,
-      allDay,
-      dtstart,
-      dtend,
-      rrule,
-      status: input.status,
-    },
-    { host: new URL(siteUrl()).host },
-  );
-
-  if (!result.ok) return fail("That event no longer exists.");
+  const outcome = await writeEvent(readEventForm(formData));
+  if (!outcome.ok) return outcome;
 
   refresh();
   redirect("/admin/events");
+}
+
+/**
+ * Everything `saveEvent` does apart from the redirect.
+ *
+ * Split out so the whole body can sit inside one try/catch: `redirect()` works
+ * by throwing, so a catch wrapped around it would swallow the navigation and
+ * report a phantom failure.
+ */
+async function writeEvent(values: EventFormValues): Promise<ActionState<EventFormValues>> {
+  const reject = rejector(values);
+
+  try {
+    // Both the target calendar and, on an edit, the one the event currently
+    // sits on: neither may be a mirror, or the save would be moving an event
+    // into or out of rows the sync owns.
+    if (values.calendarId && (await isMirrored(values.calendarId))) return reject(MIRROR_REFUSAL);
+    if (values.id) {
+      const current = await calendarIdOfEvent(values.id);
+      if (current && (await isMirrored(current))) return reject(MIRROR_REFUSAL);
+    }
+
+    const parsed = eventSchema.safeParse(values);
+    if (!parsed.success) {
+      return reject("Please fix the highlighted fields.", zodErrors(parsed.error));
+    }
+    const input = parsed.data;
+
+    const zone = timezone();
+    const dtstart = input.allDay
+      ? fromDateInput(input.start, zone)
+      : fromLocalInput(input.start, zone);
+    let dtend = input.allDay ? fromDateInput(input.end, zone) : fromLocalInput(input.end, zone);
+
+    if (dtstart === null || dtend === null) {
+      return reject("Could not read those dates.", {
+        ...(dtstart === null && { start: "Invalid date" }),
+        ...(dtend === null && { end: "Invalid date" }),
+      });
+    }
+
+    // DTEND is exclusive in RFC 5545, so a one-day all-day event ends the next
+    // day. The form asks for the last day inclusive, which is what a person means.
+    if (input.allDay) dtend += 24 * 60 * 60 * 1000;
+
+    if (dtend <= dtstart) {
+      return reject("The end must come after the start.", { end: "Must be after the start" });
+    }
+
+    const result = saveEventRecord(
+      db,
+      {
+        id: values.id,
+        calendarId: input.calendarId,
+        summary: input.summary,
+        description: input.description,
+        location: input.location,
+        url: input.url,
+        allDay: input.allDay,
+        dtstart,
+        dtend,
+        rrule: buildRRule(input.recurrence, zone),
+        status: input.status,
+      },
+      { host: new URL(siteUrl()).host },
+    );
+
+    if (!result.ok) return reject("That event no longer exists.");
+
+    return { ok: true };
+  } catch (error) {
+    console.error("[admin] saving an event failed:", error);
+    return reject(UNEXPECTED);
+  }
 }
 
 export async function deleteEvent(formData: FormData): Promise<void> {
@@ -384,31 +417,43 @@ export async function importIcs(_prev: ActionState, formData: FormData): Promise
 /* Published feeds                                                            */
 /* -------------------------------------------------------------------------- */
 
-export async function saveFeed(_prev: ActionState, formData: FormData): Promise<ActionState> {
+export async function saveFeed(
+  _prev: ActionState<FeedFormValues>,
+  formData: FormData,
+): Promise<ActionState<FeedFormValues>> {
   await requireAdmin();
 
-  const id = String(formData.get("id") ?? "").trim();
-  const parsed = feedSchema.safeParse({
-    name: formData.get("name"),
-    slug: formData.get("slug"),
-    description: formData.get("description") ?? "",
-    isPublic: formData.get("isPublic") === "on" || formData.get("isPublic") === "true",
-    calendarIds: formData.getAll("calendarIds").map(String),
-  });
-
-  if (!parsed.success) return fail("Please fix the highlighted fields.", zodErrors(parsed.error));
-
-  const result = saveFeedRecord(db, { id: id || undefined, ...parsed.data });
-  if (!result.ok) {
-    return result.reason === "slug_taken"
-      ? fail("That slug is already in use by a calendar or another feed.", {
-          slug: "Already in use",
-        })
-      : fail("Pick at least one calendar.", { calendarIds: "Pick at least one calendar" });
-  }
+  const outcome = await writeFeed(readFeedForm(formData));
+  if (!outcome.ok) return outcome;
 
   refresh();
   redirect("/admin/feeds");
+}
+
+/** As `writeEvent`: the redirect stays outside so this can be wrapped whole. */
+async function writeFeed(values: FeedFormValues): Promise<ActionState<FeedFormValues>> {
+  const reject = rejector(values);
+
+  try {
+    const parsed = feedSchema.safeParse(values);
+    if (!parsed.success) {
+      return reject("Please fix the highlighted fields.", zodErrors(parsed.error));
+    }
+
+    const result = saveFeedRecord(db, { id: values.id, ...parsed.data });
+    if (!result.ok) {
+      return result.reason === "slug_taken"
+        ? reject("That slug is already in use by a calendar or another feed.", {
+            slug: "Already in use",
+          })
+        : reject("Pick at least one calendar.", { calendarIds: "Pick at least one calendar" });
+    }
+
+    return { ok: true };
+  } catch (error) {
+    console.error("[admin] saving a feed failed:", error);
+    return reject(UNEXPECTED);
+  }
 }
 
 export async function deleteFeed(formData: FormData): Promise<void> {

@@ -6,11 +6,12 @@ import Link from "next/link";
 import { saveFeed } from "@/app/admin/actions";
 import { accentDot } from "@/lib/accents";
 import { btnGhost, btnPrimary, input, label } from "@/lib/ui";
+import type { FeedFormValues } from "@/lib/events/form";
 import type { ActionState } from "@/lib/events/validation";
 import type { Calendar, PublishedFeed } from "@/db/schema";
 import type { Accent } from "@/types";
 
-const initial: ActionState = { ok: true };
+const initial: ActionState<FeedFormValues> = { ok: true };
 
 /**
  * A published feed: one URL that serves several calendars as a single
@@ -29,7 +30,19 @@ export function FeedForm({
   memberIds?: string[];
 }) {
   const [state, action, pending] = useActionState(saveFeed, initial);
-  const members = new Set(memberIds);
+
+  // A rejected save echoes the submission back; render that rather than the
+  // stored feed, or React's post-action form reset discards the edit.
+  // See lib/events/form.ts.
+  const shown: FeedFormValues = state.values ?? {
+    id: feed?.id,
+    name: feed?.name ?? "",
+    slug: feed?.slug ?? "",
+    description: feed?.description ?? "",
+    isPublic: feed?.isPublic ?? true,
+    calendarIds: memberIds,
+  };
+  const members = new Set(shown.calendarIds);
 
   return (
     <form action={action} className="space-y-5">
@@ -51,7 +64,7 @@ export function FeedForm({
         <input
           id="name"
           name="name"
-          defaultValue={feed?.name}
+          defaultValue={shown.name}
           required
           className={input}
           placeholder="Work Schedule"
@@ -69,7 +82,7 @@ export function FeedForm({
         <input
           id="slug"
           name="slug"
-          defaultValue={feed?.slug}
+          defaultValue={shown.slug}
           required
           pattern="[a-z0-9]+(-[a-z0-9]+)*"
           className={`${input} font-mono`}
@@ -89,7 +102,7 @@ export function FeedForm({
         <input
           id="description"
           name="description"
-          defaultValue={feed?.description ?? ""}
+          defaultValue={shown.description}
           className={input}
         />
       </div>
@@ -152,7 +165,7 @@ export function FeedForm({
         <input
           type="checkbox"
           name="isPublic"
-          defaultChecked={feed?.isPublic ?? true}
+          defaultChecked={shown.isPublic}
           className="h-4 w-4 accent-[#22c55e]"
         />
         <span className="text-sm text-fg">

@@ -6,14 +6,28 @@ import Link from "next/link";
 import { saveCalendar } from "@/app/admin/actions";
 import { accentDot } from "@/lib/accents";
 import { btnGhost, btnPrimary, input, label } from "@/lib/ui";
+import type { CalendarFormValues } from "@/lib/events/form";
 import type { ActionState } from "@/lib/events/validation";
 import type { Calendar } from "@/db/schema";
 import { ACCENTS } from "@/types";
 
-const initial: ActionState = { ok: true };
+const initial: ActionState<CalendarFormValues> = { ok: true };
 
 export function CalendarForm({ calendar }: { calendar?: Calendar }) {
   const [state, action, pending] = useActionState(saveCalendar, initial);
+
+  // A rejected save echoes the submission back; render that rather than the
+  // stored calendar, or React's post-action form reset discards the edit.
+  // See lib/events/form.ts.
+  const shown: CalendarFormValues = state.values ?? {
+    id: calendar?.id,
+    name: calendar?.name ?? "",
+    slug: calendar?.slug ?? "",
+    description: calendar?.description ?? "",
+    accent: calendar?.accent ?? 1,
+    isPublic: calendar?.isPublic ?? true,
+    sourceUrl: calendar?.sourceUrl ?? "",
+  };
 
   return (
     <form action={action} className="space-y-5">
@@ -35,7 +49,7 @@ export function CalendarForm({ calendar }: { calendar?: Calendar }) {
         <input
           id="name"
           name="name"
-          defaultValue={calendar?.name}
+          defaultValue={shown.name}
           required
           className={input}
           placeholder="Work"
@@ -50,7 +64,7 @@ export function CalendarForm({ calendar }: { calendar?: Calendar }) {
         <input
           id="slug"
           name="slug"
-          defaultValue={calendar?.slug}
+          defaultValue={shown.slug}
           required
           pattern="[a-z0-9]+(-[a-z0-9]+)*"
           className={`${input} font-mono`}
@@ -70,7 +84,7 @@ export function CalendarForm({ calendar }: { calendar?: Calendar }) {
         <input
           id="description"
           name="description"
-          defaultValue={calendar?.description ?? ""}
+          defaultValue={shown.description}
           className={input}
         />
       </div>
@@ -87,7 +101,7 @@ export function CalendarForm({ calendar }: { calendar?: Calendar }) {
                 type="radio"
                 name="accent"
                 value={accent}
-                defaultChecked={(calendar?.accent ?? 1) === accent}
+                defaultChecked={shown.accent === accent}
                 className="sr-only"
               />
               <span className={`h-3 w-3 rounded-full ${accentDot[accent]}`} aria-hidden />
@@ -101,7 +115,7 @@ export function CalendarForm({ calendar }: { calendar?: Calendar }) {
         <input
           type="checkbox"
           name="isPublic"
-          defaultChecked={calendar?.isPublic ?? true}
+          defaultChecked={shown.isPublic}
           className="h-4 w-4 accent-[#22c55e]"
         />
         <span className="text-sm text-fg">
@@ -121,7 +135,7 @@ export function CalendarForm({ calendar }: { calendar?: Calendar }) {
           id="sourceUrl"
           name="sourceUrl"
           type="url"
-          defaultValue={calendar?.sourceUrl ?? ""}
+          defaultValue={shown.sourceUrl}
           className={`${input} font-mono`}
           placeholder="https://example.com/schedule.ics"
         />
