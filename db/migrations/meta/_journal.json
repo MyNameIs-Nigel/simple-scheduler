@@ -15,6 +15,13 @@
       "when": 1787800431549,
       "tag": "0001_careless_paibok",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788939349656,
+      "tag": "0002_vengeful_thunderbird",
+      "breakpoints": true
     }
   ]
 }

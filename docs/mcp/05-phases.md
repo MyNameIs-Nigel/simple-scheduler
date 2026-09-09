@@ -130,35 +130,25 @@ attributable to something you did.
 
 ---
 
-## Open questions
+## Settled Decisions on Open Questions
 
-Things this design deliberately leaves unsettled, because they want a decision
-made against real data rather than in a document.
+These decisions were settled during the implementation based on the principles of token efficiency, administrative transparency, and defensive security:
 
-**Do private calendars appear in MCP output?** The connector authenticates as the
-admin, so the defensible answer is yes — you're looking at your own data. But
-`private` currently means "not on the public site," and MCP is a third surface
-the existing two-state model didn't anticipate. Worth deciding explicitly rather
-than inheriting whichever behavior falls out.
+1. **Do private calendars appear in MCP output?**
+   - **Decision:** **Yes, by default.** Since the MCP connector authenticates exclusively via the admin Google OAuth identity (`ADMIN_EMAIL`), the caller is the calendar owner examining their own schedule. `list_calendars` supports an optional `includePrivate: false` flag if caller wishes to exclude them, but default is inclusive.
 
-**Where does the stale-mirror caveat surface?** `list_calendars` clearly carries
-sync status. Should `get_agenda` also flag that one of its sources last synced
-four days ago? Useful, but it's a line of overhead on every response — and the
-output contract says decoration is the enemy. Possibly only when the staleness
-exceeds some multiple of `SYNC_INTERVAL_MINUTES`.
+2. **Where does the stale-mirror caveat surface?**
+   - **Decision:** In `list_calendars` always (where complete sync health and last counts are reported), and in `get_agenda` **only as a concise one-line notice** when a target mirror calendar's last sync resulted in an error or is older than 24 hours. Normal healthy syncs add zero lines of overhead.
 
-**Is Claude Code's static-header path worth maintaining?** It's genuinely easier
-for development and debugging than round-tripping a browser flow, and header auth
-works reliably there today. But it's a second authentication path into the same
-data, which is a second thing to get right. Reasonable either way; leaning yes,
-behind its own flag, disabled in production.
+3. **Is Claude Code's static-header path worth maintaining?**
+   - **Decision:** **Yes, via `MCP_DEV_STATIC_KEY`.** When configured, requests with `Authorization: Bearer <MCP_DEV_STATIC_KEY>` are admitted with full read/write scopes for rapid local development and testing without completing a browser OAuth cycle. Disabled when unset.
 
-**Does read access want rate limiting at all?** One user, one client, local
-SQLite reads. Probably not for capacity — but a compromised token with no rate
-limit is an unbounded schedule exfiltration, and the audit log only tells you
-afterward.
+4. **Does read access want rate limiting at all?**
+   - **Decision:** **Yes.** We implement defensive sliding-window rate limiting on all endpoints:
+     - DCR (`/mcp/register`): 10 registrations per IP per hour.
+     - Token exchange & refresh (`/mcp/token`): 60 requests per IP per minute.
+     - Tool calls (`/mcp`): 120 calls per minute per client.
+     This protects SQLite and bounds token exfiltration if credentials are leak-compromised.
 
-**What happens to tokens on restore-from-backup?** The token tables live in
-`data/`, so a restore restores live grants — possibly ones you revoked after the
-backup was taken. Worth deciding whether restore should invalidate all grants by
-default.
+5. **What happens to tokens on restore-from-backup?**
+   - **Decision:** Tokens live in the SQLite database and restore with it. However, the admin dashboard (`/admin/mcp`) provides instant single-click revocation of active token families and a button to prune stale data. Furthermore, any detected refresh token reuse automatically revokes the entire token family immediately.
