@@ -104,6 +104,9 @@ describe("Phase 3 — Answer-shaped Tools (find_free_time, search_events, summar
             earliestHour: 9,
             latestHour: 17,
             bufferMinutes: 15,
+            // The tool only searches Mon–Fri by default, so without this the
+            // test finds nothing when CI runs on a weekend.
+            includeDays: [1, 2, 3, 4, 5, 6, 7],
           },
         },
       }),
