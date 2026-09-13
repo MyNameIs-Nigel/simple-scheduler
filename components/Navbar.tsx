@@ -23,6 +23,12 @@ export async function Navbar() {
         </Link>
 
         <nav className="flex items-center gap-6" aria-label="Main">
+          <Link
+            href="/day"
+            className="hidden text-sm text-muted transition-colors duration-200 hover:text-fg sm:inline"
+          >
+            Today
+          </Link>
           <a
             href="https://nigel-smith.dev"
             className="hidden text-sm text-muted transition-colors duration-200 hover:text-fg sm:inline"

@@ -6,7 +6,7 @@ Publicly readable, privately editable. Events live in SQLite; the `.ics` feeds
 are generated from the database on every request, so there is no exported file
 that can drift out of sync with what you edited.
 
-- **Public** — month, week and agenda views at `/`
+- **Public** — month, week and agenda views at `/`, plus a day-at-a-glance view at `/day` (`?date=YYYY-MM-DD` picks the day, with a per-day Open Graph image)
 - **Subscribable** — `/calendars/<slug>.ics` per calendar, `/calendars/all.ics` combined
 - **Subscribed calendars** — mirror a remote `.ics` URL, refreshed automatically
 - **Published feeds** — merge any set of calendars into one subscribable URL
