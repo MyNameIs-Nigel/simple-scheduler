@@ -98,7 +98,7 @@ export function MonthGrid({
                   return (
                     <li
                       key={event.key}
-                      className="truncate font-mono text-[10px] leading-tight text-fg sm:text-xs"
+                      className="break-words font-mono text-[10px] leading-tight text-fg sm:text-xs"
                       title={event.summary}
                     >
                       <span
