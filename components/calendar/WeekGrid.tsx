@@ -82,7 +82,7 @@ export function WeekGrid({
                   return (
                     <div
                       key={event.key}
-                      className={`truncate rounded border px-1 py-0.5 font-mono text-[10px] ${accentBlock[accent]}`}
+                      className={`break-words rounded border px-1 py-0.5 font-mono text-[10px] leading-tight ${accentBlock[accent]}`}
                       title={event.summary}
                     >
                       {event.summary}
@@ -147,7 +147,7 @@ export function WeekGrid({
                     <div className="truncate font-mono text-[10px] tabular-nums opacity-80">
                       {s.toFormat("HH:mm")}
                     </div>
-                    <div className="truncate text-[10px] font-medium leading-tight">
+                    <div className="break-words text-[10px] font-medium leading-tight">
                       {event.summary}
                     </div>
                   </div>

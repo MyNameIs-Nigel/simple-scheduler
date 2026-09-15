@@ -78,7 +78,7 @@ export function AgendaList({
                     </div>
 
                     {event.location && (
-                      <p className="mt-1 truncate text-xs text-muted">{event.location}</p>
+                      <p className="mt-1 break-words text-xs text-muted">{event.location}</p>
                     )}
                     {event.description && (
                       <p className="mt-1 whitespace-pre-line wrap-anywhere text-xs leading-relaxed text-muted">
