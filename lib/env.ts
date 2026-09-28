@@ -141,6 +141,7 @@ export function mcpAllowedRedirectUris(): string[] {
   return [
     "https://claude.ai/api/mcp/auth_callback",
     "https://claude.com/api/mcp/auth_callback",
+    "https://agent.meta.ai/api/hatch/oauth/callback",
   ];
 }
 
